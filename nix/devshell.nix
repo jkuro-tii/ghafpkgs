@@ -52,7 +52,7 @@
                 ]);
               packageAttrs = lib.filterAttrs isPackage self'.packages;
             in
-            builtins.attrValues packageAttrs ++ self'.packages.ghaf-audio-control.buildInputs;
+            builtins.attrValues packageAttrs ++ self'.packages.ghaf-audio-control.buildInputs ++ self'.packages.dbus-proxy.buildInputs;
         };
         # TODO: what is using the below?
         env = [
