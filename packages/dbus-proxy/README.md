@@ -36,7 +36,7 @@ Ensure these libraries are installed on your system before building the program.
 Use `g++` with `pkg-config` to compile:
 
 ```bash
-g++ -o dbus_proxy dbus_proxy.cpp $(pkg-config --cflags --libs gio-2.0 glib-2.0)
+g++ -o dbus-proxy dbus-proxy.cpp $(pkg-config --cflags --libs gio-2.0 glib-2.0)
 ```
 
 ---
@@ -56,15 +56,15 @@ g++ -o dbus_proxy dbus_proxy.cpp $(pkg-config --cflags --libs gio-2.0 glib-2.0)
 
 ## Configuration Options
 
-| Option                  | Description |
-|------------------------|-------------|
-| `--source-bus-name`     | D-Bus name of the source service. |
-| `--source-object-path`  | Object path of the source service. |
-| `--proxy-bus-name`      | Bus name to expose on the target bus. |
+| Option                  | Description                                |
+|-------------------------|--------------------------------------------|
+| `--source-bus-name`     | D-Bus name of the source service.          |
+| `--source-object-path`  | Object path of the source service.         |
+| `--proxy-bus-name`      | Bus name to expose on the target bus.      |
 | `--source-bus-type`     | Type of source bus: `system` or `session`. |
 | `--target-bus-type`     | Type of target bus: `system` or `session`. |
-| `--verbose`             | Enable verbose logging. |
-| `--help`                | Show usage information. |
+| `--verbose`             | Enable verbose logging.                    |
+| `--help`                | Show usage information.                    |
 
 ---
 

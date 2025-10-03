@@ -15,9 +15,8 @@
 
 #include <gio/gio.h>
 #include <glib/gprintf.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <glib.h>
+#include <glib-unix.h> 
 
 // Configuration structure
 typedef struct {
@@ -152,7 +151,7 @@ static gboolean discover_and_proxy_object_tree(const char *base_path,
   }
 
   const char *xml_data;
-  g_variant_get(xml_variant, "(s)", &xml_data);
+  g_variant_get(xml_variant, "(&s)", &xml_data);
 
   log_verbose("Introspection XML for %s (%zu bytes):\n%s", base_path,
               strlen(xml_data), xml_data);
@@ -358,17 +357,6 @@ static gboolean proxy_single_object(const char *object_path,
                                  .set_property = handle_set_property_generic,
                                  .padding = {0}};
 
-  // Function to check if interface is standard
-  auto is_standard_interface = [](const char *interface_name,
-                                  const char **standard_list) -> gboolean {
-    for (int i = 0; standard_list[i]; i++) {
-      if (g_strcmp0(interface_name, standard_list[i]) == 0) {
-        return TRUE;
-      }
-    }
-    return FALSE;
-  };
-
   int registered_count = 0;
 
   // Register each interface (except standard ones)
@@ -377,7 +365,7 @@ static gboolean proxy_single_object(const char *object_path,
     GError *error = nullptr;
 
     // Skip standard D-Bus interfaces - GDBus provides these automatically
-    if (is_standard_interface(iface->name, standard_interfaces)) {
+    if (g_strv_contains(standard_interfaces, iface->name)) {
       log_verbose("Skipping standard interface: %s", iface->name);
       continue;
     }
@@ -485,18 +473,17 @@ static void update_object_with_new_interfaces(const char *object_path,
   // Iterate through the new interfaces
   GVariantIter iter;
   char *interface_name;
-  GVariant *properties;
+  // GVariant *properties;
 
   if (g_variant_iter_init(&iter, interfaces_dict)) {
     while (
-        g_variant_iter_next(&iter, "{s@a{sv}}", &interface_name, &properties)) {
+        g_variant_iter_next(&iter, "{&s@a{sv}}", &interface_name, nullptr/*&properties*/)) {
       // Check if this interface is already registered
       if (g_hash_table_contains(existing_obj->registration_ids,
                                 interface_name)) {
         log_verbose("Interface %s already registered on %s", interface_name,
                     object_path);
-        g_free(interface_name);
-        g_variant_unref(properties);
+        // g_variant_unref(properties);
         continue;
       }
 
@@ -506,8 +493,8 @@ static void update_object_with_new_interfaces(const char *object_path,
       // Register the new interface
       register_single_interface(object_path, interface_name, existing_obj);
 
-      g_free(interface_name);
-      g_variant_unref(properties);
+      // g_free(interface_name);
+      // g_variant_unref(properties);
     }
   }
   g_rw_lock_writer_unlock(&proxy_state->rw_lock);
@@ -517,12 +504,10 @@ static gboolean register_single_interface(const char *object_path,
                                           const char *interface_name,
                                           ProxiedObject *proxied_obj) {
   // Skip standard interfaces
-  for (int i = 0; standard_interfaces[i]; i++) {
-    if (g_strcmp0(interface_name, standard_interfaces[i]) == 0) {
+  if (g_strv_contains(standard_interfaces, interface_name)) {
       log_verbose("Skipping standard interface: %s", interface_name);
       return TRUE;
     }
-  }
 
   // Need to get interface info - introspect the object
   GError *error = nullptr;
@@ -540,7 +525,7 @@ static gboolean register_single_interface(const char *object_path,
   }
 
   const char *xml_data;
-  g_variant_get(xml_variant, "(s)", &xml_data);
+  g_variant_get(xml_variant, "(&s)", &xml_data);
 
   GDBusNodeInfo *node_info = g_dbus_node_info_new_for_xml(xml_data, &error);
   g_variant_unref(xml_variant);
@@ -641,7 +626,7 @@ static void on_interfaces_removed(GDBusConnection *connection G_GNUC_UNUSED,
   g_variant_get(parameters, "(&o^as)", &removed_object_path,
                 &removed_interfaces);
 
-  log_info("Object disappeared from NetworkManager: %s", removed_object_path);
+  log_info("Object disappeared: %s", removed_object_path);
   g_rw_lock_writer_lock(&proxy_state->rw_lock);
   // Look up the proxied object
   ProxiedObject *obj = (ProxiedObject *)g_hash_table_lookup(
@@ -749,7 +734,7 @@ static gboolean fetch_introspection_data() {
   }
 
   const char *xml_data;
-  g_variant_get(xml_variant, "(s)", &xml_data);
+  g_variant_get(xml_variant, "(&s)", &xml_data);
 
   log_verbose("Introspection XML received (%zu bytes)", strlen(xml_data));
 
@@ -971,10 +956,15 @@ static void cleanup_proxy_state() {
 }
 
 // Signal handler for graceful shutdown
-static void signal_handler(int signum) {
+static gboolean signal_handler(void *user_data) {
+  int signum = GPOINTER_TO_INT(user_data);
   log_info("Received signal %d, shutting down...", signum);
-  cleanup_proxy_state();
-  exit(0);
+
+  // Quit the main loop safely
+  if (proxy_state->main_loop) {
+      g_main_loop_quit(proxy_state->main_loop);
+  }
+  return G_SOURCE_REMOVE;
 }
 
 // Parse bus type from string
@@ -1065,8 +1055,8 @@ int main(int argc, char *argv[]) {
   validateProxyConfigOrExit(&config);
 
   // Set up signal handlers
-  signal(SIGINT, signal_handler);
-  signal(SIGTERM, signal_handler);
+  g_unix_signal_add(SIGINT, signal_handler, GINT_TO_POINTER(SIGINT));
+  g_unix_signal_add(SIGTERM, signal_handler, GINT_TO_POINTER(SIGTERM));
 
   log_info("Starting cross-bus D-Bus proxy");
   log_info("Source: %s%s on %s bus", config.source_bus_name,
