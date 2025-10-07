@@ -447,7 +447,7 @@ on_signal_received_catchall(GDBusConnection *connection G_GNUC_UNUSED,
       g_str_has_prefix(object_path, proxy_state->config.source_object_path) ||
       g_strcmp0(object_path, "/org/freedesktop/DBus") == 0) {
 
-    log_verbose("Signal received: %s.%s from %s at %s", interface_name,
+    log_verbose("Signal received????: %s.%s from %s at %s", interface_name,
                 signal_name, sender_name, object_path);
 
     GError *error = nullptr;
