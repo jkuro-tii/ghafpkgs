@@ -432,6 +432,16 @@ on_signal_received_catchall(GDBusConnection *connection G_GNUC_UNUSED,
       g_hash_table_contains(proxy_state->proxied_objects, object_path);
   g_rw_lock_reader_unlock(&proxy_state->rw_lock);
 
+  // jarekk: todo: delete
+  log_verbose("Signal received: %s---%s from %s at %s", interface_name,
+              signal_name, sender_name, object_path);
+
+  if (g_strcmp0(signal_name, "InterfacesAdded") == 0 &&
+      g_strcmp0(interface_name, "org.freedesktop.DBus.ObjectManager") == 0) {
+    // Handle InterfacesAdded separately in order to avoid race conditions
+    log_verbose("Skipping InterfacesAdded in catch-all");
+    return;
+  }
   // Forward only if it's a proxied object or the D-Bus daemon itself
   if (is_proxied ||
       g_str_has_prefix(object_path, proxy_state->config.source_object_path) ||
@@ -609,6 +619,19 @@ static void on_interfaces_added(GDBusConnection *connection G_GNUC_UNUSED,
                                     interfaces_and_properties);
 
   g_variant_unref(interfaces_and_properties);
+
+  // Send signal to the target bus
+  GError *error = nullptr;
+  gboolean success = g_dbus_connection_emit_signal(
+      proxy_state->target_bus, nullptr, object_path, interface_name,
+      signal_name, parameters, &error);
+
+  if (!success) {
+    log_error("Failed to forward signal: %s",
+              error ? error->message : "Unknown error");
+    if (error)
+      g_error_free(error);
+  }
 }
 
 static void on_interfaces_removed(GDBusConnection *connection G_GNUC_UNUSED,
