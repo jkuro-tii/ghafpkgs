@@ -14,9 +14,9 @@
  */
 
 #include <gio/gio.h>
-#include <glib/gprintf.h>
+#include <glib-unix.h>
 #include <glib.h>
-#include <glib-unix.h> 
+#include <glib/gprintf.h>
 
 // Configuration structure
 typedef struct {
@@ -25,6 +25,7 @@ typedef struct {
   const char *proxy_bus_name;
   GBusType source_bus_type;
   GBusType target_bus_type;
+  gboolean nm_mode;
   gboolean verbose;
   gboolean info;
 } ProxyConfig;
@@ -37,6 +38,8 @@ typedef struct {
   GHashTable *registered_objects;   // Track registered object IDs
   GHashTable *signal_subscriptions; // Track signal subscription IDs
   ProxyConfig config;
+  guint secret_agent_reg_id;
+  gchar *client_sender_name;
   guint name_owner_watch_id;
   guint source_service_watch_id;
   guint catch_all_subscription_id;              // For catching all signals
@@ -231,9 +234,8 @@ static gboolean discover_and_proxy_object_tree(const char *base_path,
 
 // Generic method call handler that works for any object path
 static void handle_method_call_generic(
-    G_GNUC_UNUSED GDBusConnection *connection, const char *sender,
-    const char *object_path, const char *interface_name,
-    const char *method_name, GVariant *parameters,
+    GDBusConnection *connection, const char *sender, const char *object_path,
+    const char *interface_name, const char *method_name, GVariant *parameters,
     GDBusMethodInvocation *invocation, gpointer user_data) {
   const char *target_object_path = (const char *)user_data;
 
@@ -241,12 +243,32 @@ static void handle_method_call_generic(
               interface_name, method_name, object_path, sender,
               target_object_path);
 
+  // Determine which bus to forward to
+  GDBusConnection *forward_bus;
+  const char *forward_bus_name;
+  if (connection == proxy_state->target_bus) {
+    forward_bus = proxy_state->source_bus;
+    forward_bus_name = proxy_state->config.source_bus_name;
+
+    if (proxy_state->config.nm_mode) {
+      if (proxy_state->client_sender_name) {
+        g_free(proxy_state->client_sender_name);
+      }
+      // Remember the client that called us
+      proxy_state->client_sender_name = g_strdup(sender);
+      log_info("Remembering client sender name: %s",
+               proxy_state->client_sender_name);
+    }
+  } else {
+    forward_bus = proxy_state->target_bus;
+    forward_bus_name = proxy_state->client_sender_name;
+  }
   // Take a reference to ensure invocation stays alive
   g_object_ref(invocation);
 
   // Forward the call to the source bus using the original object path
   g_dbus_connection_call(
-      proxy_state->source_bus, proxy_state->config.source_bus_name,
+      forward_bus, forward_bus_name,
       target_object_path, // Use the original object path from source bus
       interface_name, method_name, parameters, nullptr, G_DBUS_CALL_FLAGS_NONE,
       -1, nullptr,
@@ -439,6 +461,7 @@ on_signal_received_catchall(GDBusConnection *connection G_GNUC_UNUSED,
   if (g_strcmp0(signal_name, "InterfacesAdded") == 0 &&
       g_strcmp0(interface_name, "org.freedesktop.DBus.ObjectManager") == 0) {
     // Handle InterfacesAdded separately in order to avoid race conditions
+    // jarekk: delete it
     log_verbose("Skipping InterfacesAdded in catch-all");
     return;
   }
@@ -486,8 +509,8 @@ static void update_object_with_new_interfaces(const char *object_path,
   // GVariant *properties;
 
   if (g_variant_iter_init(&iter, interfaces_dict)) {
-    while (
-        g_variant_iter_next(&iter, "{&s@a{sv}}", &interface_name, nullptr/*&properties*/)) {
+    while (g_variant_iter_next(&iter, "{&s@a{sv}}", &interface_name,
+                               nullptr /*&properties*/)) {
       // Check if this interface is already registered
       if (g_hash_table_contains(existing_obj->registration_ids,
                                 interface_name)) {
@@ -515,9 +538,9 @@ static gboolean register_single_interface(const char *object_path,
                                           ProxiedObject *proxied_obj) {
   // Skip standard interfaces
   if (g_strv_contains(standard_interfaces, interface_name)) {
-      log_verbose("Skipping standard interface: %s", interface_name);
-      return TRUE;
-    }
+    log_verbose("Skipping standard interface: %s", interface_name);
+    return TRUE;
+  }
 
   // Need to get interface info - introspect the object
   GError *error = nullptr;
@@ -703,6 +726,73 @@ static gboolean init_proxy_state(const ProxyConfig *config) {
   return TRUE;
 }
 
+static gboolean register_nm_secret_agent() {
+  const char *nm_secret_agent_xml = g_getenv("NM_SECRET_AGENT_XML");
+  if (!nm_secret_agent_xml) {
+    log_error("NM secret agent mode enabled but NM_SECRET_AGENT_XML not set");
+    return FALSE;
+  }
+
+  // Load XML file
+  gchar *interface_xml = NULL;
+  GError *error = NULL;
+
+  if (!g_file_get_contents(nm_secret_agent_xml, &interface_xml, NULL, &error)) {
+    log_error("Failed to read NM secret agent XML from %s: %s",
+              nm_secret_agent_xml, error ? error->message : "unknown error");
+    g_clear_error(&error);
+    return FALSE;
+  }
+
+  // Parse XML
+  GDBusNodeInfo *info = g_dbus_node_info_new_for_xml(interface_xml, &error);
+  g_free(interface_xml); // Free as soon as no longer needed
+  interface_xml = NULL;
+
+  if (!info) {
+    log_error("Failed to parse NM secret agent XML: %s",
+              error ? error->message : "unknown error");
+    g_clear_error(&error);
+    return FALSE;
+  }
+
+  // Validate interfaces
+  if (!info->interfaces || !info->interfaces[0]) {
+    log_error("No interfaces found in NM secret agent XML");
+    g_dbus_node_info_unref(info);
+    return FALSE;
+  }
+
+  log_info("Registering interface: %s", info->interfaces[0]->name);
+
+  // Setup vtable
+  static const GDBusInterfaceVTable vtable = {.method_call =
+                                                  handle_method_call_generic,
+                                              .get_property = NULL,
+                                              .set_property = NULL,
+                                              .padding = {0}};
+
+  // Register object
+  proxy_state->secret_agent_reg_id = g_dbus_connection_register_object(
+      proxy_state->source_bus, "/org/freedesktop/NetworkManager/SecretAgent",
+      info->interfaces[0], &vtable,
+      NULL, // user_data
+      NULL, // user_data_free_func
+      &error);
+
+  g_dbus_node_info_unref(info);
+  if (proxy_state->secret_agent_reg_id == 0) {
+    log_error("Failed to register SecretAgent object: %s",
+              error ? error->message : "unknown error");
+    g_clear_error(&error);
+    return FALSE;
+  }
+
+  log_info("NetworkManager secret agent proxy registered with ID %u",
+           proxy_state->secret_agent_reg_id);
+  return TRUE;
+}
+
 // Connect to both buses
 static gboolean connect_to_buses() {
   GError *error = nullptr;
@@ -719,7 +809,12 @@ static gboolean connect_to_buses() {
            proxy_state->config.source_bus_type == G_BUS_TYPE_SYSTEM
                ? "system"
                : "session");
-
+  // If in NM secret agent mode, register the secret agent interface
+  if (proxy_state->config.nm_mode) {
+    if (!register_nm_secret_agent()) {
+      return FALSE;
+    }
+  }
   // Connect to target bus
   proxy_state->target_bus =
       g_bus_get_sync(proxy_state->config.target_bus_type, nullptr, &error);
@@ -923,7 +1018,18 @@ static void cleanup_proxy_state() {
     }
     g_hash_table_destroy(proxy_state->registered_objects);
   }
-
+  // Unregister secret agent
+  if (proxy_state->config.nm_mode) {
+    if (proxy_state->secret_agent_reg_id) {
+      g_dbus_connection_unregister_object(proxy_state->source_bus,
+                                          proxy_state->secret_agent_reg_id);
+      proxy_state->secret_agent_reg_id = 0;
+    }
+    if (proxy_state->client_sender_name) {
+      g_free(proxy_state->client_sender_name);
+      proxy_state->client_sender_name = nullptr;
+    }
+  }
   // Unsubscribe from catch-all signal
   if (proxy_state->catch_all_subscription_id && proxy_state->source_bus) {
     g_dbus_connection_signal_unsubscribe(
@@ -985,7 +1091,7 @@ static gboolean signal_handler(void *user_data) {
 
   // Quit the main loop safely
   if (proxy_state->main_loop) {
-      g_main_loop_quit(proxy_state->main_loop);
+    g_main_loop_quit(proxy_state->main_loop);
   }
   return G_SOURCE_REMOVE;
 }
@@ -1023,6 +1129,7 @@ int main(int argc, char *argv[]) {
                         .proxy_bus_name = "",
                         .source_bus_type = G_BUS_TYPE_SYSTEM,
                         .target_bus_type = G_BUS_TYPE_SESSION,
+                        .nm_mode = FALSE,
                         .verbose = FALSE,
                         .info = FALSE};
 
@@ -1042,6 +1149,8 @@ int main(int argc, char *argv[]) {
        "Bus type of the source (system|session)", "TYPE"},
       {"target-bus-type", 0, 0, G_OPTION_ARG_STRING, &opt_target_bus_type,
        "Bus type of the proxy (system|session)", "TYPE"},
+      {"nm-mode", 0, 0, G_OPTION_ARG_NONE, &config.nm_mode,
+       "Enable NetworkManager mode", nullptr},
       {"verbose", 0, 0, G_OPTION_ARG_NONE, &config.verbose,
        "Enable verbose output", nullptr},
       {"info", 0, 0, G_OPTION_ARG_NONE, &config.info, "Show additional info",
@@ -1074,6 +1183,25 @@ int main(int argc, char *argv[]) {
     g_free(opt_target_bus_type);
   }
 
+  if (config.nm_mode) {
+    // In NetworkManager mode, we proxy NetworkManager's D-Bus interface
+    if (!config.source_bus_name)
+      config.source_bus_name = "org.freedesktop.NetworkManager";
+    if (!config.source_object_path)
+      config.source_object_path = "/org/freedesktop/NetworkManager";
+    if (!config.proxy_bus_name)
+      config.proxy_bus_name = "org.freedesktop.NetworkManager";
+
+  } else {
+    // Ensure required parameters are provided
+    if (!config.source_bus_name || !strlen(config.source_bus_name) ||
+        !config.source_object_path || !strlen(config.source_object_path) ||
+        !config.proxy_bus_name || !strlen(config.proxy_bus_name)) {
+      log_error("Error: --source-bus-name, --source-object-path, and "
+                "--proxy-bus-name are required unless --nm-mode is used.");
+      return 1;
+    }
+  }
   // Validate configuration
   validateProxyConfigOrExit(&config);
 
