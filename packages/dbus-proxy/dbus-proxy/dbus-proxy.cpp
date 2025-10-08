@@ -779,10 +779,13 @@ static gboolean register_nm_secret_agent() {
                                               .padding = {0}};
 
   // Register object
+  // jarekk: check freeing the object, how to avoid memory leak
+  // get path from xml?
+  gchar *object_path = g_strdup("/org/freedesktop/NetworkManager/SecretAgent");
   proxy_state->secret_agent_reg_id = g_dbus_connection_register_object(
-      proxy_state->source_bus, "/org/freedesktop/NetworkManager/SecretAgent",
+      proxy_state->source_bus, object_path,
       info->interfaces[0], &vtable,
-      NULL, // user_data
+      g_strdup(object_path), // user_data
       NULL, // user_data_free_func
       &error);
 
