@@ -242,7 +242,7 @@ static void handle_method_call_generic(
   log_verbose("Method call: %s.%s on %s from %s (forwarding to %s)",
               interface_name, method_name, object_path, sender,
               target_object_path);
-
+  
   // Determine which bus to forward to
   GDBusConnection *forward_bus;
   const char *forward_bus_name;
@@ -262,7 +262,13 @@ static void handle_method_call_generic(
   } else {
     forward_bus = proxy_state->target_bus;
     forward_bus_name = proxy_state->client_sender_name;
+    log_verbose("Forwarding back to client: %s", forward_bus_name);  
   }
+  
+  log_verbose("Method call: %s.%s on %s from %s (forwarding to %s)",
+                interface_name, method_name, object_path, sender,
+                target_object_path);
+
   // Take a reference to ensure invocation stays alive
   g_object_ref(invocation);
 
