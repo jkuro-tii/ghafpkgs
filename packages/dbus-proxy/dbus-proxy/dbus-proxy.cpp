@@ -252,13 +252,17 @@ static void handle_method_call_generic(
     forward_bus_name = proxy_state->config.source_bus_name;
 
     if (proxy_state->config.nm_mode) {
-      if (proxy_state->client_sender_name) {
+      g_rw_lock_writer_lock(&proxy_state->rw_lock);
+
+      if (!proxy_state->client_sender_name ||
+          g_strcmp0(proxy_state->client_sender_name, sender) != 0) {
+
         g_free(proxy_state->client_sender_name);
-      }
-      // Remember the client that called us
       proxy_state->client_sender_name = g_strdup(sender);
-      log_info("Remembering client sender name: %s",
-               proxy_state->client_sender_name);
+        log_info("Remembering client sender name: %s", sender);
+      }
+
+      g_rw_lock_writer_unlock(&proxy_state->rw_lock);
     }
   } else {
     forward_bus = proxy_state->target_bus;
