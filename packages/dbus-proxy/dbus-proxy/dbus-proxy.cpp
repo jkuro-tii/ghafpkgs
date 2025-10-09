@@ -47,6 +47,7 @@ typedef struct {
   guint catch_interfaces_removed_subscription_id; // For catching
                                                   // InterfacesRemoved
   GHashTable *proxied_objects; // object_path -> ProxiedObject*
+  GHashTable *node_info_cache;
   GRWLock rw_lock;
   GMainLoop *main_loop;
 } ProxyState;
@@ -148,7 +149,7 @@ static gboolean discover_and_proxy_object_tree(const char *base_path,
       } else {
         log_error("Introspection error for %s: %s", base_path, error->message);
       }
-      g_error_free(error);
+      g_clear_error(&error);
     }
     return TRUE; // Continue with other objects
   }
@@ -166,7 +167,7 @@ static gboolean discover_and_proxy_object_tree(const char *base_path,
     log_error("Failed to parse introspection XML for %s: %s", base_path,
               error ? error->message : "Unknown");
     if (error)
-      g_error_free(error);
+      g_clear_error(&error);
     return FALSE;
   }
 
@@ -293,7 +294,7 @@ static void handle_method_call_generic(
                     error ? error->message : "Unknown error");
           g_dbus_method_invocation_return_gerror(inv, error);
           if (error)
-            g_error_free(error);
+            g_clear_error(&error);
         }
         // Release our reference
         g_object_unref(inv);
@@ -363,6 +364,8 @@ handle_set_property_generic(G_GNUC_UNUSED GDBusConnection *connection,
 static gboolean proxy_single_object(const char *object_path,
                                     GDBusNodeInfo *node_info,
                                     gboolean need_lock) {
+  // jarekk: fix interfaces adding!
+
   // Skip if no interfaces to proxy
   if (!node_info->interfaces || !node_info->interfaces[0]) {
     log_verbose("Object %s has no interfaces, skipping", object_path);
@@ -380,10 +383,11 @@ static gboolean proxy_single_object(const char *object_path,
   proxied_obj->registration_ids =
       g_hash_table_new_full(g_str_hash, g_str_equal, g_free, nullptr);
 
-  GDBusInterfaceVTable vtable = {.method_call = handle_method_call_generic,
-                                 .get_property = handle_get_property_generic,
-                                 .set_property = handle_set_property_generic,
-                                 .padding = {0}};
+  static GDBusInterfaceVTable vtable = {
+      .method_call = handle_method_call_generic,
+      .get_property = handle_get_property_generic,
+      .set_property = handle_set_property_generic,
+      .padding = {0}};
 
   int registered_count = 0;
 
@@ -410,7 +414,7 @@ static gboolean proxy_single_object(const char *object_path,
       log_error("Failed to register interface %s on %s: %s", iface->name,
                 object_path, error ? error->message : "Unknown error");
       if (error)
-        g_error_free(error);
+        g_clear_error(&error);
       continue; // Try other interfaces
     }
 
@@ -475,7 +479,7 @@ on_signal_received_catchall(GDBusConnection *connection G_GNUC_UNUSED,
   if (is_proxied ||
       g_str_has_prefix(object_path, proxy_state->config.source_object_path) ||
       g_strcmp0(object_path, "/org/freedesktop/DBus") == 0) {
-
+    // jarekk: todo: fix or delete
     log_verbose("Signal received????: %s.%s from %s at %s", interface_name,
                 signal_name, sender_name, object_path);
 
@@ -488,7 +492,7 @@ on_signal_received_catchall(GDBusConnection *connection G_GNUC_UNUSED,
       log_error("Failed to forward signal: %s",
                 error ? error->message : "Unknown error");
       if (error)
-        g_error_free(error);
+        g_clear_error(&error);
     }
   } else {
     log_error("Signal %s.%s from %s at %s ignored (not proxied)",
@@ -546,6 +550,7 @@ static void update_object_with_new_interfaces(const char *object_path,
 static gboolean register_single_interface(const char *object_path,
                                           const char *interface_name,
                                           ProxiedObject *proxied_obj) {
+  // jarekk: reviewed
   // Skip standard interfaces
   if (g_strv_contains(standard_interfaces, interface_name)) {
     log_verbose("Skipping standard interface: %s", interface_name);
@@ -563,7 +568,7 @@ static gboolean register_single_interface(const char *object_path,
     log_error("Failed to introspect %s for interface %s: %s", object_path,
               interface_name, error ? error->message : "Unknown");
     if (error)
-      g_error_free(error);
+      g_clear_error(&error);
     return FALSE;
   }
 
@@ -576,8 +581,7 @@ static gboolean register_single_interface(const char *object_path,
   if (!node_info) {
     log_error("Failed to parse introspection XML: %s",
               error ? error->message : "Unknown");
-    if (error)
-      g_error_free(error);
+    g_clear_error(&error);
     return FALSE;
   }
 
@@ -597,10 +601,11 @@ static gboolean register_single_interface(const char *object_path,
   }
 
   // Register the interface
-  GDBusInterfaceVTable vtable = {.method_call = handle_method_call_generic,
-                                 .get_property = handle_get_property_generic,
-                                 .set_property = handle_set_property_generic,
-                                 .padding = {0}};
+  static const GDBusInterfaceVTable vtable = {
+      .method_call = handle_method_call_generic,
+      .get_property = handle_get_property_generic,
+      .set_property = handle_set_property_generic,
+      .padding = {nullptr}};
 
   guint registration_id = g_dbus_connection_register_object(
       proxy_state->target_bus, object_path, iface_info, &vtable,
@@ -609,17 +614,21 @@ static gboolean register_single_interface(const char *object_path,
   if (registration_id == 0) {
     log_error("Failed to register interface %s on %s: %s", interface_name,
               object_path, error ? error->message : "Unknown");
-    if (error)
-      g_error_free(error);
+    g_clear_error(&error);
     g_dbus_node_info_unref(node_info);
     return FALSE;
   }
+
+  // Store node_info in global cache (keeps iface_info alive)
+  char *cache_key = g_strdup_printf("%s:%s", object_path, interface_name);
+  g_hash_table_insert(proxy_state->node_info_cache, cache_key,
+                      node_info); // Don't unref - stored in cache
 
   // Store registration ID
   g_hash_table_insert(proxied_obj->registration_ids, g_strdup(interface_name),
                       GUINT_TO_POINTER(registration_id));
 
-  // Also add to global registry
+  // Add to global registry
   g_hash_table_insert(proxy_state->registered_objects,
                       GUINT_TO_POINTER(registration_id),
                       g_strdup_printf("%s:%s", object_path, interface_name));
@@ -627,7 +636,6 @@ static gboolean register_single_interface(const char *object_path,
   log_info("Successfully registered interface %s on %s (ID: %u)",
            interface_name, object_path, registration_id);
 
-  g_dbus_node_info_unref(node_info);
   return TRUE;
 }
 
@@ -664,7 +672,7 @@ static void on_interfaces_added(GDBusConnection *connection G_GNUC_UNUSED,
     log_error("Failed to forward signal: %s",
               error ? error->message : "Unknown error");
     if (error)
-      g_error_free(error);
+      g_clear_error(&error);
   }
 }
 
@@ -721,6 +729,11 @@ static void on_interfaces_removed(GDBusConnection *connection G_GNUC_UNUSED,
     // Unregister from D-Bus
     gboolean success =
         g_dbus_connection_unregister_object(proxy_state->target_bus, reg_id);
+    // Remove from global cache
+    char *cache_key = g_strdup_printf("%s:%s", removed_object_path, iface);
+    g_hash_table_remove(proxy_state->node_info_cache, cache_key);
+    g_free(cache_key);
+
     if (success) {
       log_verbose("Unregistered interface %s on %s (reg_id=%u)", iface,
                   removed_object_path, reg_id);
@@ -773,22 +786,35 @@ static gboolean init_proxy_state(const ProxyConfig *config) {
   proxy_state->catch_interfaces_removed_subscription_id = 0;
   proxy_state->proxied_objects = g_hash_table_new_full(
       g_str_hash, g_str_equal, g_free, free_proxied_object);
+  proxy_state->node_info_cache = g_hash_table_new_full(
+      g_str_hash, g_str_equal, g_free, (GDestroyNotify)g_dbus_node_info_unref);
 
   return TRUE;
 }
 
 static gboolean register_nm_secret_agent() {
   const char *nm_secret_agent_xml = g_getenv("NM_SECRET_AGENT_XML");
+  const char *object_path = "/org/freedesktop/NetworkManager/SecretAgent";
+
   if (!nm_secret_agent_xml) {
     log_error("NM secret agent mode enabled but NM_SECRET_AGENT_XML not set");
     return FALSE;
   }
 
-  // Load XML file
-  gchar *interface_xml = NULL;
-  GError *error = NULL;
+  // Check if already registered
+  if (proxy_state->secret_agent_reg_id != 0) {
+    log_error("Secret agent already registered (ID: %u), skipping",
+                proxy_state->secret_agent_reg_id);
+    return TRUE;
+  }
 
-  if (!g_file_get_contents(nm_secret_agent_xml, &interface_xml, NULL, &error)) {
+  GError *error = nullptr;
+  gchar *interface_xml = nullptr;
+  GDBusNodeInfo *info = nullptr;
+
+  // Load XML file
+  if (!g_file_get_contents(nm_secret_agent_xml, &interface_xml, nullptr,
+                           &error)) {
     log_error("Failed to read NM secret agent XML from %s: %s",
               nm_secret_agent_xml, error ? error->message : "unknown error");
     g_clear_error(&error);
@@ -796,9 +822,8 @@ static gboolean register_nm_secret_agent() {
   }
 
   // Parse XML
-  GDBusNodeInfo *info = g_dbus_node_info_new_for_xml(interface_xml, &error);
-  g_free(interface_xml); // Free as soon as no longer needed
-  interface_xml = NULL;
+  info = g_dbus_node_info_new_for_xml(interface_xml, &error);
+  g_free(interface_xml);
 
   if (!info) {
     log_error("Failed to parse NM secret agent XML: %s",
@@ -814,36 +839,69 @@ static gboolean register_nm_secret_agent() {
     return FALSE;
   }
 
-  log_info("Registering interface: %s", info->interfaces[0]->name);
+  // Optional: Validate interface name
+  const char *expected_interface = "org.freedesktop.NetworkManager.SecretAgent";
+  if (g_strcmp0(info->interfaces[0]->name, expected_interface) != 0) {
+    log_error("Unexpected interface: %s (expected %s)",
+                info->interfaces[0]->name, expected_interface);
+  }
+
+  log_info("Registering secret agent interface %s at %s",
+           info->interfaces[0]->name, object_path);
+
+  // Hash table takes ownership
+  g_hash_table_insert(proxy_state->node_info_cache, g_strdup("secret_agent"),
+                      info);
 
   // Setup vtable
   static const GDBusInterfaceVTable vtable = {.method_call =
                                                   handle_method_call_generic,
-                                              .get_property = NULL,
-                                              .set_property = NULL,
-                                              .padding = {0}};
+                                              .get_property = nullptr,
+                                              .set_property = nullptr,
+                                              .padding = {nullptr}};
 
   // Register object
-  // jarekk: check freeing the object, how to avoid memory leak
-  // get path from xml?
-  gchar *object_path = g_strdup("/org/freedesktop/NetworkManager/SecretAgent");
   proxy_state->secret_agent_reg_id = g_dbus_connection_register_object(
-      proxy_state->source_bus, object_path, info->interfaces[0], &vtable,
-      g_strdup(object_path), // user_data
-      NULL,                  // user_data_free_func
+      proxy_state->source_bus, object_path,
+      info->interfaces[0], // This pointer is kept alive by cached 'info'
+      &vtable,
+      g_strdup(object_path), // user_data - will be freed by g_free
+      g_free,                // user_data_free_func
       &error);
 
-  g_dbus_node_info_unref(info);
   if (proxy_state->secret_agent_reg_id == 0) {
-    log_error("Failed to register SecretAgent object: %s",
+    log_error("Failed to register secret agent at %s: %s", object_path,
               error ? error->message : "unknown error");
     g_clear_error(&error);
+
+    // Clean up cache entry since registration failed
+    g_hash_table_remove(proxy_state->node_info_cache, "secret_agent");
     return FALSE;
   }
 
-  log_info("NetworkManager secret agent proxy registered with ID %u",
+  log_info("Secret agent registered: %s at %s (ID: %u)",
+           info->interfaces[0]->name, object_path,
            proxy_state->secret_agent_reg_id);
+
   return TRUE;
+}
+
+static void unregister_nm_secret_agent() {
+  if (proxy_state->secret_agent_reg_id == 0) {
+    return; // Not registered
+  }
+
+  log_info("Unregistering secret agent (ID: %u)",
+           proxy_state->secret_agent_reg_id);
+
+  // Unregister from D-Bus
+  g_dbus_connection_unregister_object(proxy_state->source_bus,
+                                      proxy_state->secret_agent_reg_id);
+
+  // Remove from cache (will automatically unref the node_info)
+  g_hash_table_remove(proxy_state->node_info_cache, "secret_agent");
+
+  proxy_state->secret_agent_reg_id = 0;
 }
 
 // Connect to both buses
@@ -855,7 +913,7 @@ static gboolean connect_to_buses() {
       g_bus_get_sync(proxy_state->config.source_bus_type, nullptr, &error);
   if (!proxy_state->source_bus) {
     log_error("Failed to connect to source bus: %s", error->message);
-    g_error_free(error);
+    g_clear_error(&error);
     return FALSE;
   }
   log_info("Connected to source bus (%s)",
@@ -873,7 +931,7 @@ static gboolean connect_to_buses() {
       g_bus_get_sync(proxy_state->config.target_bus_type, nullptr, &error);
   if (!proxy_state->target_bus) {
     log_error("Failed to connect to target bus: %s", error->message);
-    g_error_free(error);
+    g_clear_error(&error);
     return FALSE;
   }
   log_info("Connected to target bus (%s)",
@@ -900,7 +958,7 @@ static gboolean fetch_introspection_data() {
 
   if (!xml_variant) {
     log_error("Introspection failed: %s", error->message);
-    g_error_free(error);
+    g_clear_error(&error);
     return FALSE;
   }
 
@@ -915,7 +973,7 @@ static gboolean fetch_introspection_data() {
 
   if (!proxy_state->introspection_data) {
     log_error("Failed to parse introspection XML: %s", error->message);
-    g_error_free(error);
+    g_clear_error(&error);
     return FALSE;
   }
 
@@ -1065,19 +1123,20 @@ static void cleanup_proxy_state() {
     gpointer key, value;
     g_hash_table_iter_init(&iter, proxy_state->registered_objects);
     while (g_hash_table_iter_next(&iter, &key, &value)) {
+      // jarekk: free interfaces
       g_dbus_connection_unregister_object(proxy_state->target_bus,
                                           GPOINTER_TO_UINT(key));
       g_free(value);
     }
     g_hash_table_destroy(proxy_state->registered_objects);
   }
+  // Unregister interfaces and clean up
+  if (proxy_state->node_info_cache) {
+    g_hash_table_destroy(proxy_state->node_info_cache);
+  }
   // Unregister secret agent
   if (proxy_state->config.nm_mode) {
-    if (proxy_state->secret_agent_reg_id) {
-      g_dbus_connection_unregister_object(proxy_state->source_bus,
-                                          proxy_state->secret_agent_reg_id);
-      proxy_state->secret_agent_reg_id = 0;
-    }
+    unregister_nm_secret_agent();
     if (proxy_state->client_sender_name) {
       g_free(proxy_state->client_sender_name);
       proxy_state->client_sender_name = nullptr;
@@ -1218,7 +1277,7 @@ int main(int argc, char *argv[]) {
   g_option_context_add_main_entries(context, entries, nullptr);
   if (!g_option_context_parse(context, &argc, &argv, &error)) {
     log_error("Failed to parse options: %s", error->message);
-    g_error_free(error);
+    g_clear_error(&error);
     g_option_context_free(context);
     return 1;
   }
