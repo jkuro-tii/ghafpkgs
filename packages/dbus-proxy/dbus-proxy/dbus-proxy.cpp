@@ -242,7 +242,7 @@ static void handle_method_call_generic(
   log_verbose("Method call: %s.%s on %s from %s (forwarding to %s)",
               interface_name, method_name, object_path, sender,
               target_object_path);
-  
+
   // Determine which bus to forward to
   GDBusConnection *forward_bus;
   const char *forward_bus_name;
@@ -262,12 +262,12 @@ static void handle_method_call_generic(
   } else {
     forward_bus = proxy_state->target_bus;
     forward_bus_name = proxy_state->client_sender_name;
-    log_verbose("Forwarding back to client: %s", forward_bus_name);  
+    log_verbose("Forwarding back to client: %s", forward_bus_name);
   }
-  
+
   log_verbose("Method call: %s.%s on %s from %s (forwarding to %s)",
-                interface_name, method_name, object_path, sender,
-                target_object_path);
+              interface_name, method_name, object_path, sender,
+              target_object_path);
 
   // Take a reference to ensure invocation stays alive
   g_object_ref(invocation);
@@ -512,7 +512,6 @@ static void update_object_with_new_interfaces(const char *object_path,
   // Iterate through the new interfaces
   GVariantIter iter;
   char *interface_name;
-  // GVariant *properties;
 
   if (g_variant_iter_init(&iter, interfaces_dict)) {
     while (g_variant_iter_next(&iter, "{&s@a{sv}}", &interface_name,
@@ -522,7 +521,6 @@ static void update_object_with_new_interfaces(const char *object_path,
                                 interface_name)) {
         log_verbose("Interface %s already registered on %s", interface_name,
                     object_path);
-        // g_variant_unref(properties);
         continue;
       }
 
@@ -531,9 +529,6 @@ static void update_object_with_new_interfaces(const char *object_path,
 
       // Register the new interface
       register_single_interface(object_path, interface_name, existing_obj);
-
-      // g_free(interface_name);
-      // g_variant_unref(properties);
     }
   }
   g_rw_lock_writer_unlock(&proxy_state->rw_lock);
@@ -670,37 +665,77 @@ static void on_interfaces_removed(GDBusConnection *connection G_GNUC_UNUSED,
                                   const char *signal_name G_GNUC_UNUSED,
                                   GVariant *parameters,
                                   gpointer user_data G_GNUC_UNUSED) {
-  const char *removed_object_path;
-  const char **removed_interfaces;
+  const gchar *removed_object_path;
+  gchar **removed_interfaces = nullptr;
 
   // InterfacesRemoved has signature: (oas)
   // object_path + array of interface names
   g_variant_get(parameters, "(&o^as)", &removed_object_path,
                 &removed_interfaces);
 
-  log_info("Object disappeared: %s", removed_object_path);
-  g_rw_lock_writer_lock(&proxy_state->rw_lock);
-  // Look up the proxied object
-  ProxiedObject *obj = (ProxiedObject *)g_hash_table_lookup(
-      proxy_state->proxied_objects, removed_object_path);
-  if (obj) {
-    // Unregister all interfaces for this object
-    GHashTableIter iter;
-    gpointer key, value;
-    g_hash_table_iter_init(&iter, obj->registration_ids);
-    while (g_hash_table_iter_next(&iter, &key, &value)) {
-      guint reg_id = GPOINTER_TO_UINT(value);
-      g_dbus_connection_unregister_object(proxy_state->target_bus, reg_id);
-      log_verbose("Unregistered interface %s on %s", (char *)key,
-                  removed_object_path);
-    }
+  if (!removed_interfaces || removed_interfaces[0] == NULL) {
+    log_info("InterfacesRemoved signal with no interfaces for %s",
+                removed_object_path);
+    g_strfreev(removed_interfaces);
+    return;
+  }
+  // Log what was removed
+  char *iface_list = g_strjoinv(", ", removed_interfaces);
+  log_info("InterfacesRemoved: %s [%s]", removed_object_path, iface_list);
+  g_free(iface_list);
 
-    // Remove from our cache
-    g_hash_table_remove(proxy_state->proxied_objects, removed_object_path);
+  g_rw_lock_writer_lock(&proxy_state->rw_lock);
+
+  // Look up the proxied object
+  ProxiedObject *obj =
+      (ProxiedObject *) g_hash_table_lookup(proxy_state->proxied_objects, removed_object_path);
+  if (!obj) {
+    g_rw_lock_writer_unlock(&proxy_state->rw_lock);
+    log_verbose("Object %s not in proxy cache, ignoring removal",
+                removed_object_path);
+    g_strfreev(removed_interfaces);
+    return;
   }
 
-  g_free(removed_interfaces);
+  // Unregister only the specific interfaces that were removed
+  for (gsize i = 0; removed_interfaces[i] != NULL; i++) {
+    const char *iface = removed_interfaces[i];
+
+    guint reg_id =
+        GPOINTER_TO_UINT(g_hash_table_lookup(obj->registration_ids, iface));
+    if (reg_id == 0) {
+      log_verbose("Interface %s on %s was not registered, skipping", iface,
+                  removed_object_path);
+      continue;
+    }
+    // Unregister from D-Bus
+    gboolean success =
+        g_dbus_connection_unregister_object(proxy_state->target_bus, reg_id);
+    if (success) {
+      log_verbose("Unregistered interface %s on %s (reg_id=%u)", iface,
+                  removed_object_path, reg_id);
+    } else {
+      log_error("Failed to unregister interface %s on %s (reg_id=%u)", iface,
+                  removed_object_path, reg_id);
+    }
+    // Remove from our tracking tables
+    g_hash_table_remove(proxy_state->registered_objects,
+                        GUINT_TO_POINTER(reg_id));
+    g_hash_table_remove(obj->registration_ids, iface);
+  }
+
+  // If all interfaces are gone, remove the entire object
+  if (g_hash_table_size(obj->registration_ids) == 0) {
+    log_info("All interfaces removed for %s, removing object from cache",
+             removed_object_path);
+    g_hash_table_remove(proxy_state->proxied_objects, removed_object_path);
+  } else {
+    log_verbose("Object %s still has %u interface(s) remaining",
+                removed_object_path, g_hash_table_size(obj->registration_ids));
+  }
   g_rw_lock_writer_unlock(&proxy_state->rw_lock);
+  // Free the interface array
+  g_strfreev(removed_interfaces);
 }
 
 static void on_service_vanished(GDBusConnection *connection G_GNUC_UNUSED,
@@ -783,10 +818,9 @@ static gboolean register_nm_secret_agent() {
   // get path from xml?
   gchar *object_path = g_strdup("/org/freedesktop/NetworkManager/SecretAgent");
   proxy_state->secret_agent_reg_id = g_dbus_connection_register_object(
-      proxy_state->source_bus, object_path,
-      info->interfaces[0], &vtable,
+      proxy_state->source_bus, object_path, info->interfaces[0], &vtable,
       g_strdup(object_path), // user_data
-      NULL, // user_data_free_func
+      NULL,                  // user_data_free_func
       &error);
 
   g_dbus_node_info_unref(info);
