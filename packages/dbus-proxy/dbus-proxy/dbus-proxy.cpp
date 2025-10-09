@@ -498,39 +498,48 @@ on_signal_received_catchall(GDBusConnection *connection G_GNUC_UNUSED,
 
 static void update_object_with_new_interfaces(const char *object_path,
                                               GVariant *interfaces_dict) {
+  if (!object_path || !interfaces_dict) {
+    log_error("Invalid parameters");
+    return;
+  }
+
   g_rw_lock_writer_lock(&proxy_state->rw_lock);
+
   ProxiedObject *existing_obj = (ProxiedObject *)g_hash_table_lookup(
       proxy_state->proxied_objects, object_path);
+
   if (!existing_obj) {
-    // Object doesn't exist yet, need to create it
-    log_info("Object %s not found, creating new proxy", object_path);
     g_rw_lock_writer_unlock(&proxy_state->rw_lock);
+    log_info("Object %s not found, creating new proxy", object_path);
     discover_and_proxy_object_tree(object_path, TRUE);
     return;
   }
 
   // Iterate through the new interfaces
   GVariantIter iter;
-  char *interface_name;
+  const char *interface_name;
+  GVariant *properties = nullptr;
 
-  if (g_variant_iter_init(&iter, interfaces_dict)) {
-    while (g_variant_iter_next(&iter, "{&s@a{sv}}", &interface_name,
-                               nullptr /*&properties*/)) {
-      // Check if this interface is already registered
-      if (g_hash_table_contains(existing_obj->registration_ids,
-                                interface_name)) {
-        log_verbose("Interface %s already registered on %s", interface_name,
-                    object_path);
-        continue;
-      }
-
-      log_info("Adding new interface %s to object %s", interface_name,
-               object_path);
-
-      // Register the new interface
-      register_single_interface(object_path, interface_name, existing_obj);
+  g_variant_iter_init(&iter, interfaces_dict);
+  while (
+      g_variant_iter_next(&iter, "{&s@a{sv}}", &interface_name, &properties)) {
+    // Check if this interface is already registered
+    if (g_hash_table_contains(existing_obj->registration_ids, interface_name)) {
+      log_verbose("Interface %s already registered on %s", interface_name,
+                  object_path);
+      g_variant_unref(properties);
+      continue;
     }
+
+    log_info("Adding new interface %s to object %s", interface_name,
+             object_path);
+
+    // Register the new interface
+    register_single_interface(object_path, interface_name, existing_obj);
+
+    g_variant_unref(properties);
   }
+
   g_rw_lock_writer_unlock(&proxy_state->rw_lock);
 }
 
@@ -630,6 +639,7 @@ static void on_interfaces_added(GDBusConnection *connection G_GNUC_UNUSED,
                                 const char *signal_name G_GNUC_UNUSED,
                                 GVariant *parameters,
                                 gpointer user_data G_GNUC_UNUSED) {
+  // jarekk: reviewed
   const char *added_object_path;
   GVariant *interfaces_and_properties;
 
@@ -675,7 +685,7 @@ static void on_interfaces_removed(GDBusConnection *connection G_GNUC_UNUSED,
 
   if (!removed_interfaces || removed_interfaces[0] == NULL) {
     log_info("InterfacesRemoved signal with no interfaces for %s",
-                removed_object_path);
+             removed_object_path);
     g_strfreev(removed_interfaces);
     return;
   }
@@ -687,8 +697,8 @@ static void on_interfaces_removed(GDBusConnection *connection G_GNUC_UNUSED,
   g_rw_lock_writer_lock(&proxy_state->rw_lock);
 
   // Look up the proxied object
-  ProxiedObject *obj =
-      (ProxiedObject *) g_hash_table_lookup(proxy_state->proxied_objects, removed_object_path);
+  ProxiedObject *obj = (ProxiedObject *)g_hash_table_lookup(
+      proxy_state->proxied_objects, removed_object_path);
   if (!obj) {
     g_rw_lock_writer_unlock(&proxy_state->rw_lock);
     log_verbose("Object %s not in proxy cache, ignoring removal",
@@ -716,7 +726,7 @@ static void on_interfaces_removed(GDBusConnection *connection G_GNUC_UNUSED,
                   removed_object_path, reg_id);
     } else {
       log_error("Failed to unregister interface %s on %s (reg_id=%u)", iface,
-                  removed_object_path, reg_id);
+                removed_object_path, reg_id);
     }
     // Remove from our tracking tables
     g_hash_table_remove(proxy_state->registered_objects,
