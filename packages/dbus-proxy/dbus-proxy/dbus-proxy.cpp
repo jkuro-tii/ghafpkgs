@@ -8,9 +8,13 @@
  * 1. Connects to two different D-Bus buses (source and target).
  * 2. Fetches introspection data from source service on source bus.
  * 3. Exposes that interface on target bus with proxy name.
- * 4. Forwards method calls from target bus to source bus.
- * 5. Forwards signals from source bus to target bus.
- * 6. Handles properties synchronization between buses.
+ * 4. If works in nm-applet mode, the proxy exposes nm-applet's 
+ *    interface (Secret Agent) on source bus, as NetworkManager calls it.
+ * 5. In nm-applet mode forwards calls from NetworkManager to the real
+ *    nm-applet service on the destination bus.
+ * 6. Forwards method calls from target bus to source bus.
+ * 7. Forwards signals from source bus to target bus.
+ * 8. Handles properties synchronization between buses.
  */
 
 #include <gio/gio.h>
@@ -331,8 +335,7 @@ static void handle_method_call_generic(
   g_dbus_connection_call(forward_bus, forward_bus_name, target_object_path,
                          interface_name, method_name, parameters, nullptr,
                          G_DBUS_CALL_FLAGS_NONE, -1, nullptr,
-                         method_call_reply_callback,
-                         ctx);
+                         method_call_reply_callback, ctx);
 }
 
 // Generic property handlers that work for any object path
@@ -354,11 +357,11 @@ static GVariant *handle_get_property_generic(
 
   if (result) {
     GVariant *value;
-    g_variant_get(result, "(v)", &value);  // Borrowed reference
-    g_variant_ref(value);                  // Take ownership
+    g_variant_get(result, "(v)", &value); // Borrowed reference
+    g_variant_ref(value);                 // Take ownership
     g_variant_unref(result);
     log_verbose("Property get successful");
-    return value;                          // Caller will unref
+    return value; // Caller will unref
   }
 
   log_error("Property get failed: %s",
@@ -531,13 +534,11 @@ on_signal_received_catchall(GDBusConnection *connection G_GNUC_UNUSED,
       g_hash_table_contains(proxy_state->proxied_objects, object_path);
   g_rw_lock_reader_unlock(&proxy_state->rw_lock);
 
-  log_verbose("Signal received????: %s.%s from %s at %s", interface_name,
+  log_verbose("Signal received: %s.%s from %s at %s", interface_name,
               signal_name, sender_name, object_path);
 
   if (g_strcmp0(signal_name, "InterfacesAdded") == 0 &&
       g_strcmp0(interface_name, "org.freedesktop.DBus.ObjectManager") == 0) {
-    // Handle InterfacesAdded separately in order to avoid race conditions
-    // jarekk: delete it
     log_verbose("Skipping InterfacesAdded in catch-all");
     return;
   }
@@ -554,8 +555,7 @@ on_signal_received_catchall(GDBusConnection *connection G_GNUC_UNUSED,
     if (!success) {
       log_error("Failed to forward signal: %s",
                 error ? error->message : "Unknown error");
-      if (error)
-        g_clear_error(&error);
+      g_clear_error(&error);
     }
   } else {
     log_error("Signal %s.%s from %s at %s ignored (not proxied)",
@@ -613,7 +613,6 @@ static void update_object_with_new_interfaces(const char *object_path,
 static gboolean register_single_interface(const char *object_path,
                                           const char *interface_name,
                                           ProxiedObject *proxied_obj) {
-  // jarekk: reviewed
   // Skip standard interfaces
   if (g_strv_contains(standard_interfaces, interface_name)) {
     log_verbose("Skipping standard interface: %s", interface_name);
@@ -709,7 +708,6 @@ static void on_interfaces_added(GDBusConnection *connection G_GNUC_UNUSED,
                                 const char *interface_name,
                                 const char *signal_name, GVariant *parameters,
                                 gpointer user_data G_GNUC_UNUSED) {
-  // jarekk: reviewed
   const char *added_object_path;
   GVariant *interfaces_and_properties;
 
@@ -1185,7 +1183,6 @@ static void cleanup_proxy_state() {
     gpointer key, value;
     g_hash_table_iter_init(&iter, proxy_state->registered_objects);
     while (g_hash_table_iter_next(&iter, &key, &value)) {
-      // jarekk: free interfaces
       g_dbus_connection_unregister_object(proxy_state->target_bus,
                                           GPOINTER_TO_UINT(key));
       g_free(value);
