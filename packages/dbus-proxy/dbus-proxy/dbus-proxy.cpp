@@ -126,6 +126,8 @@ static void free_proxied_object(gpointer data) {
 static gboolean discover_and_proxy_object_tree(const char *base_path,
                                                gboolean need_lock) {
   GError *error = nullptr;
+  GDBusNodeInfo *node_info = nullptr;
+  gboolean success = FALSE;
 
   log_info("Discovering object tree starting from: %s", base_path);
 
@@ -134,77 +136,75 @@ static gboolean discover_and_proxy_object_tree(const char *base_path,
       proxy_state->source_bus, proxy_state->config.source_bus_name, base_path,
       "org.freedesktop.DBus.Introspectable", "Introspect", nullptr,
       G_VARIANT_TYPE("(s)"), G_DBUS_CALL_FLAGS_NONE,
-      10000, // 10 second timeout - increased for slow systems
+      10000, // 10 second timeout
       nullptr, &error);
 
   if (!xml_variant) {
     // Some objects might not be introspectable, that's ok
-    log_verbose("Could not introspect %s: %s", base_path,
-                error ? error->message : "Unknown error");
-    if (error) {
-      // Only log as error if it's not a simple "no such object" error
-      if (error->domain == G_DBUS_ERROR &&
-          error->code == G_DBUS_ERROR_UNKNOWN_OBJECT) {
-        log_verbose("Object %s does not exist, skipping", base_path);
-      } else {
-        log_error("Introspection error for %s: %s", base_path, error->message);
-      }
-      g_clear_error(&error);
+    if (error && error->domain == G_DBUS_ERROR &&
+        error->code == G_DBUS_ERROR_UNKNOWN_OBJECT) {
+      log_verbose("Object %s does not exist, skipping", base_path);
+    } else {
+      log_verbose("Could not introspect %s: %s", base_path,
+                  error ? error->message : "Unknown error");
     }
+    g_clear_error(&error);
     return TRUE; // Continue with other objects
   }
 
   const char *xml_data;
   g_variant_get(xml_variant, "(&s)", &xml_data);
 
-  log_verbose("Introspection XML for %s (%zu bytes):\n%s", base_path,
-              strlen(xml_data), xml_data);
+  log_verbose("Introspection XML for %s (%zu bytes)", base_path,
+              strlen(xml_data));
 
-  GDBusNodeInfo *node_info = g_dbus_node_info_new_for_xml(xml_data, &error);
+  node_info = g_dbus_node_info_new_for_xml(xml_data, &error);
   g_variant_unref(xml_variant);
 
   if (!node_info) {
     log_error("Failed to parse introspection XML for %s: %s", base_path,
               error ? error->message : "Unknown");
-    if (error)
-      g_clear_error(&error);
+    g_clear_error(&error);
     return FALSE;
   }
 
-  // Show what interfaces we found
+  // Log what we found
   if (node_info->interfaces) {
     for (int i = 0; node_info->interfaces[i]; i++) {
       log_verbose("Found interface: %s", node_info->interfaces[i]->name);
     }
   }
 
-  // Show what child nodes we found
   if (node_info->nodes) {
     for (int i = 0; node_info->nodes[i]; i++) {
       const char *child_name = node_info->nodes[i]->path;
       log_verbose("Found child node: %s",
                   child_name ? child_name : "(unnamed)");
     }
-  } else {
-    log_verbose("No child nodes found for %s", base_path);
   }
 
+  // Acquire lock if needed
   if (need_lock) {
     g_rw_lock_writer_lock(&proxy_state->rw_lock);
   }
+
   // Proxy this object if it has interfaces
   if (!proxy_single_object(base_path, node_info, FALSE)) {
-    g_dbus_node_info_unref(node_info);
-    if (need_lock) {
-      g_rw_lock_writer_unlock(&proxy_state->rw_lock);
-    }
-    return FALSE;
+    // proxy_single_object failed
+    success = FALSE;
+    goto cleanup;
+  }
+
+  // Release lock before recursion to avoid holding it during slow operations
+  if (need_lock) {
+    g_rw_lock_writer_unlock(&proxy_state->rw_lock);
   }
 
   // Recursively handle child nodes
   if (node_info->nodes) {
     for (int i = 0; node_info->nodes[i]; i++) {
       const char *child_name = node_info->nodes[i]->path;
+
       if (!child_name || strlen(child_name) == 0) {
         log_verbose("Skipping unnamed child node");
         continue;
@@ -221,18 +221,25 @@ static gboolean discover_and_proxy_object_tree(const char *base_path,
       log_verbose("Recursively processing child: %s", child_path);
 
       // Recurse into child (don't fail if child fails)
-      discover_and_proxy_object_tree(child_path, FALSE);
-
+      discover_and_proxy_object_tree(child_path,
+                                     TRUE); // ✅ Need lock for recursive calls
       g_free(child_path);
     }
   }
+
+  success = TRUE;
+
+  // No need to cleanup lock here since we already released it before recursion
+  g_dbus_node_info_unref(node_info);
+  return success;
+
+cleanup:
   if (need_lock) {
     g_rw_lock_writer_unlock(&proxy_state->rw_lock);
   }
   g_dbus_node_info_unref(node_info);
-  return TRUE;
+  return success;
 }
-
 // Generic method call handler that works for any object path
 static void handle_method_call_generic(
     GDBusConnection *connection, const char *sender, const char *object_path,
@@ -258,7 +265,7 @@ static void handle_method_call_generic(
           g_strcmp0(proxy_state->client_sender_name, sender) != 0) {
 
         g_free(proxy_state->client_sender_name);
-      proxy_state->client_sender_name = g_strdup(sender);
+        proxy_state->client_sender_name = g_strdup(sender);
         log_info("Remembering client sender name: %s", sender);
       }
 
@@ -409,7 +416,7 @@ static gboolean proxy_single_object(const char *object_path,
   // Create proxied object structure
   ProxiedObject *proxied_obj = g_new0(ProxiedObject, 1);
   proxied_obj->object_path = g_strdup(object_path);
-  proxied_obj->node_info = g_dbus_node_info_ref(node_info); // Keep alive
+  proxied_obj->node_info = g_dbus_node_info_ref(node_info);
   proxied_obj->registration_ids =
       g_hash_table_new_full(g_str_hash, g_str_equal, g_free, nullptr);
 
@@ -436,7 +443,7 @@ static gboolean proxy_single_object(const char *object_path,
                 object_path);
 
     GError *error = nullptr;
-        guint registration_id = g_dbus_connection_register_object(
+    guint registration_id = g_dbus_connection_register_object(
         proxy_state->target_bus, object_path, iface, &vtable,
         g_strdup(object_path), // Pass object path as user_data for forwarding
         g_free, &error);
@@ -497,8 +504,7 @@ on_signal_received_catchall(GDBusConnection *connection G_GNUC_UNUSED,
       g_hash_table_contains(proxy_state->proxied_objects, object_path);
   g_rw_lock_reader_unlock(&proxy_state->rw_lock);
 
-  // jarekk: todo: delete
-  log_verbose("Signal received: %s---%s from %s at %s", interface_name,
+  log_verbose("Signal received????: %s.%s from %s at %s", interface_name,
               signal_name, sender_name, object_path);
 
   if (g_strcmp0(signal_name, "InterfacesAdded") == 0 &&
@@ -512,9 +518,6 @@ on_signal_received_catchall(GDBusConnection *connection G_GNUC_UNUSED,
   if (is_proxied ||
       g_str_has_prefix(object_path, proxy_state->config.source_object_path) ||
       g_strcmp0(object_path, "/org/freedesktop/DBus") == 0) {
-    // jarekk: todo: fix or delete
-    log_verbose("Signal received????: %s.%s from %s at %s", interface_name,
-                signal_name, sender_name, object_path);
 
     GError *error = nullptr;
     gboolean success = g_dbus_connection_emit_signal(
@@ -675,10 +678,9 @@ static gboolean register_single_interface(const char *object_path,
 // Forward signals from source bus to target bus - InterfacesAdded handler
 static void on_interfaces_added(GDBusConnection *connection G_GNUC_UNUSED,
                                 const char *sender_name G_GNUC_UNUSED,
-                                const char *object_path G_GNUC_UNUSED,
-                                const char *interface_name G_GNUC_UNUSED,
-                                const char *signal_name G_GNUC_UNUSED,
-                                GVariant *parameters,
+                                const char *object_path,
+                                const char *interface_name,
+                                const char *signal_name, GVariant *parameters,
                                 gpointer user_data G_GNUC_UNUSED) {
   // jarekk: reviewed
   const char *added_object_path;
@@ -837,7 +839,7 @@ static gboolean register_nm_secret_agent() {
   // Check if already registered
   if (proxy_state->secret_agent_reg_id != 0) {
     log_error("Secret agent already registered (ID: %u), skipping",
-                proxy_state->secret_agent_reg_id);
+              proxy_state->secret_agent_reg_id);
     return TRUE;
   }
 
@@ -875,7 +877,7 @@ static gboolean register_nm_secret_agent() {
   // Optional: Validate interface name
   const char *expected_interface = "org.freedesktop.NetworkManager.SecretAgent";
   if (g_strcmp0(info->interfaces[0]->name, expected_interface) != 0) {
-    log_error("Unexpected interface: %s (expected %s)",
+    log_verbose("Unexpected interface: %s (expected %s)",
                 info->interfaces[0]->name, expected_interface);
   }
 
