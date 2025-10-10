@@ -435,7 +435,8 @@ static gboolean proxy_single_object(const char *object_path,
     log_verbose("Registering interface %s on object %s", iface->name,
                 object_path);
 
-    guint registration_id = g_dbus_connection_register_object(
+    GError *error = nullptr;
+        guint registration_id = g_dbus_connection_register_object(
         proxy_state->target_bus, object_path, iface, &vtable,
         g_strdup(object_path), // Pass object path as user_data for forwarding
         g_free, &error);
