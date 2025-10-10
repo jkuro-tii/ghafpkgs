@@ -409,7 +409,7 @@ static gboolean proxy_single_object(const char *object_path,
   // Create proxied object structure
   ProxiedObject *proxied_obj = g_new0(ProxiedObject, 1);
   proxied_obj->object_path = g_strdup(object_path);
-  proxied_obj->node_info = g_dbus_node_info_ref(node_info);
+  proxied_obj->node_info = g_dbus_node_info_ref(node_info); // Keep alive
   proxied_obj->registration_ids =
       g_hash_table_new_full(g_str_hash, g_str_equal, g_free, nullptr);
 
@@ -425,9 +425,8 @@ static gboolean proxy_single_object(const char *object_path,
   // Register each interface (except standard ones)
   for (int i = 0; node_info->interfaces[i]; i++) {
     GDBusInterfaceInfo *iface = node_info->interfaces[i];
-    GError *error = nullptr;
 
-    // Skip standard D-Bus interfaces - GDBus provides these automatically
+    // Skip standard D-Bus interfaces
     if (g_strv_contains(standard_interfaces, iface->name)) {
       log_verbose("Skipping standard interface: %s", iface->name);
       continue;
@@ -455,7 +454,7 @@ static gboolean proxy_single_object(const char *object_path,
     g_hash_table_insert(proxied_obj->registration_ids, g_strdup(iface->name),
                         GUINT_TO_POINTER(registration_id));
 
-    // Also add to global registry for cleanup
+    // Add to global registry for cleanup
     g_hash_table_insert(proxy_state->registered_objects,
                         GUINT_TO_POINTER(registration_id),
                         g_strdup_printf("%s:%s", object_path, iface->name));
@@ -465,11 +464,12 @@ static gboolean proxy_single_object(const char *object_path,
   }
 
   if (registered_count > 0) {
-    // Store the proxied object only if we registered something
+    // Store the proxied object
     g_hash_table_insert(proxy_state->proxied_objects, g_strdup(object_path),
                         proxied_obj);
-    log_info("Successfully proxied object %s with %d interfaces", object_path,
-             registered_count);
+
+    log_info("Successfully proxied object %s with %u interface%s", object_path,
+             registered_count, registered_count == 1 ? "" : "s");
   } else {
     // No interfaces registered, clean up
     log_verbose("No custom interfaces registered for %s", object_path);
@@ -479,6 +479,7 @@ static gboolean proxy_single_object(const char *object_path,
   if (need_lock) {
     g_rw_lock_writer_unlock(&proxy_state->rw_lock);
   }
+
   return TRUE;
 }
 
