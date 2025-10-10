@@ -1179,6 +1179,14 @@ static void cleanup_proxy_state() {
   if (!proxy_state)
     return;
 
+  // Unregister secret agent
+  if (proxy_state->config.nm_mode) {
+    unregister_nm_secret_agent();
+    if (proxy_state->client_sender_name) {
+      g_free(proxy_state->client_sender_name);
+      proxy_state->client_sender_name = nullptr;
+    }
+  }
   // Unregister objects
   if (proxy_state->registered_objects) {
     GHashTableIter iter;
@@ -1194,14 +1202,6 @@ static void cleanup_proxy_state() {
   // Unregister interfaces and clean up
   if (proxy_state->node_info_cache) {
     g_hash_table_destroy(proxy_state->node_info_cache);
-  }
-  // Unregister secret agent
-  if (proxy_state->config.nm_mode) {
-    unregister_nm_secret_agent();
-    if (proxy_state->client_sender_name) {
-      g_free(proxy_state->client_sender_name);
-      proxy_state->client_sender_name = nullptr;
-    }
   }
   // Unsubscribe from catch-all signal
   if (proxy_state->catch_all_subscription_id && proxy_state->source_bus) {
