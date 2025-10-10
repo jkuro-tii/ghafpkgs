@@ -954,6 +954,7 @@ static void unregister_nm_secret_agent() {
   log_info("Unregistering secret agent (ID: %u)",
            proxy_state->secret_agent_reg_id);
 
+  g_rw_lock_writer_lock(&proxy_state->rw_lock);
   // Unregister from D-Bus
   g_dbus_connection_unregister_object(proxy_state->source_bus,
                                       proxy_state->secret_agent_reg_id);
@@ -962,6 +963,7 @@ static void unregister_nm_secret_agent() {
   g_hash_table_remove(proxy_state->node_info_cache, "secret_agent");
 
   proxy_state->secret_agent_reg_id = 0;
+  g_rw_lock_writer_unlock(&proxy_state->rw_lock);
 }
 
 // Connect to both buses
