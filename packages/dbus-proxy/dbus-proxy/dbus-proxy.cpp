@@ -240,73 +240,99 @@ cleanup:
   g_dbus_node_info_unref(node_info);
   return success;
 }
-// Generic method call handler that works for any object path
+
+struct MethodCallContext {
+  GDBusMethodInvocation *invocation;
+  char *forward_bus_name;
+};
+
+static void method_call_reply_callback(GObject *source, GAsyncResult *res,
+                                       gpointer user_data) {
+  MethodCallContext *ctx = static_cast<MethodCallContext *>(user_data);
+  GError *error = nullptr;
+
+  GVariant *result =
+      g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
+
+  if (result) {
+    log_verbose("Method call successful, returning result");
+    g_dbus_method_invocation_return_value(ctx->invocation, result);
+  } else {
+    log_error("Method call failed: %s",
+              error ? error->message : "Unknown error");
+    g_dbus_method_invocation_return_gerror(ctx->invocation, error);
+    g_clear_error(&error);
+  }
+
+  g_object_unref(ctx->invocation);
+  g_free(ctx->forward_bus_name);
+  g_free(ctx);
+}
+
 static void handle_method_call_generic(
     GDBusConnection *connection, const char *sender, const char *object_path,
     const char *interface_name, const char *method_name, GVariant *parameters,
     GDBusMethodInvocation *invocation, gpointer user_data) {
-  const char *target_object_path = (const char *)user_data;
+
+  const char *target_object_path = static_cast<const char *>(user_data);
 
   log_verbose("Method call: %s.%s on %s from %s (forwarding to %s)",
               interface_name, method_name, object_path, sender,
               target_object_path);
 
-  // Determine which bus to forward to
-  GDBusConnection *forward_bus;
-  const char *forward_bus_name;
+  GDBusConnection *forward_bus = nullptr;
+  char *forward_bus_name = nullptr;
+
   if (connection == proxy_state->target_bus) {
     forward_bus = proxy_state->source_bus;
-    forward_bus_name = proxy_state->config.source_bus_name;
+    forward_bus_name = g_strdup(proxy_state->config.source_bus_name);
 
     if (proxy_state->config.nm_mode) {
       g_rw_lock_writer_lock(&proxy_state->rw_lock);
-
       if (!proxy_state->client_sender_name ||
           g_strcmp0(proxy_state->client_sender_name, sender) != 0) {
-
         g_free(proxy_state->client_sender_name);
         proxy_state->client_sender_name = g_strdup(sender);
         log_info("Remembering client sender name: %s", sender);
       }
-
       g_rw_lock_writer_unlock(&proxy_state->rw_lock);
     }
-  } else {
+  } else if (connection == proxy_state->source_bus) {
     forward_bus = proxy_state->target_bus;
-    forward_bus_name = proxy_state->client_sender_name;
+
+    g_rw_lock_reader_lock(&proxy_state->rw_lock);
+    if (!proxy_state->client_sender_name) {
+      g_rw_lock_reader_unlock(&proxy_state->rw_lock);
+      log_error("No client sender registered, cannot forward method call");
+      g_dbus_method_invocation_return_error(invocation, G_DBUS_ERROR,
+                                            G_DBUS_ERROR_FAILED,
+                                            "No client registered with proxy");
+      return;
+    }
+    forward_bus_name = g_strdup(proxy_state->client_sender_name);
+    g_rw_lock_reader_unlock(&proxy_state->rw_lock);
+
     log_verbose("Forwarding back to client: %s", forward_bus_name);
+
+  } else {
+    log_error("Method call from unknown connection %p", connection);
+    g_dbus_method_invocation_return_error(
+        invocation, G_DBUS_ERROR, G_DBUS_ERROR_FAILED,
+        "Internal proxy error: unknown connection");
+    return;
   }
 
-  // Take a reference to ensure invocation stays alive
+  MethodCallContext *ctx = g_new0(MethodCallContext, 1);
+  ctx->invocation = invocation;
+  ctx->forward_bus_name = forward_bus_name;
+
   g_object_ref(invocation);
 
-  // Forward the call to the source bus using the original object path
-  g_dbus_connection_call(
-      forward_bus, forward_bus_name,
-      target_object_path, // Use the original object path from source bus
-      interface_name, method_name, parameters, nullptr, G_DBUS_CALL_FLAGS_NONE,
-      -1, nullptr,
-      (GAsyncReadyCallback)[](GObject * source, GAsyncResult * res,
-                              gpointer user_data) {
-        GDBusMethodInvocation *inv = (GDBusMethodInvocation *)user_data;
-        GError *error = nullptr;
-        GVariant *result = g_dbus_connection_call_finish(
-            G_DBUS_CONNECTION(source), res, &error);
-
-        if (result) {
-          log_verbose("Method call successful, returning result");
-          g_dbus_method_invocation_return_value(inv, result);
-        } else {
-          log_error("Method call failed: %s",
-                    error ? error->message : "Unknown error");
-          g_dbus_method_invocation_return_gerror(inv, error);
-          if (error)
-            g_clear_error(&error);
-        }
-        // Release our reference
-        g_object_unref(inv);
-      },
-      invocation);
+  g_dbus_connection_call(forward_bus, forward_bus_name, target_object_path,
+                         interface_name, method_name, parameters, nullptr,
+                         G_DBUS_CALL_FLAGS_NONE, -1, nullptr,
+                         method_call_reply_callback,
+                         ctx);
 }
 
 // Generic property handlers that work for any object path
