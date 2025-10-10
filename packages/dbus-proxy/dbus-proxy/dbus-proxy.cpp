@@ -354,10 +354,11 @@ static GVariant *handle_get_property_generic(
 
   if (result) {
     GVariant *value;
-    g_variant_get(result, "(v)", &value);
+    g_variant_get(result, "(v)", &value);  // Borrowed reference
+    g_variant_ref(value);                  // Take ownership
     g_variant_unref(result);
     log_verbose("Property get successful");
-    return value;
+    return value;                          // Caller will unref
   }
 
   log_error("Property get failed: %s",
