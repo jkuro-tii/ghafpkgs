@@ -270,10 +270,6 @@ static void handle_method_call_generic(
     log_verbose("Forwarding back to client: %s", forward_bus_name);
   }
 
-  log_verbose("Method call: %s.%s on %s from %s (forwarding to %s)",
-              interface_name, method_name, object_path, sender,
-              target_object_path);
-
   // Take a reference to ensure invocation stays alive
   g_object_ref(invocation);
 
@@ -368,18 +364,48 @@ handle_set_property_generic(G_GNUC_UNUSED GDBusConnection *connection,
 static gboolean proxy_single_object(const char *object_path,
                                     GDBusNodeInfo *node_info,
                                     gboolean need_lock) {
-  // jarekk: fix interfaces adding!
+  // Validate parameters
+  if (!object_path || !node_info) {
+    log_error("Invalid parameters to proxy_single_object");
+    return FALSE;
+  }
 
-  // Skip if no interfaces to proxy
+  // Early validation before locking
   if (!node_info->interfaces || !node_info->interfaces[0]) {
     log_verbose("Object %s has no interfaces, skipping", object_path);
     return TRUE;
   }
 
-  log_info("Proxying object: %s", object_path);
+  // Count non-standard interfaces
+  guint interface_count = 0;
+  for (int i = 0; node_info->interfaces[i]; i++) {
+    if (!g_strv_contains(standard_interfaces, node_info->interfaces[i]->name)) {
+      interface_count++;
+    }
+  }
+
+  if (interface_count == 0) {
+    log_verbose("Object %s has only standard interfaces, skipping",
+                object_path);
+    return TRUE;
+  }
+
+  log_info("Proxying object %s (%u custom interface%s)", object_path,
+           interface_count, interface_count == 1 ? "" : "s");
+
   if (need_lock) {
     g_rw_lock_writer_lock(&proxy_state->rw_lock);
   }
+
+  // Check for duplicate
+  if (g_hash_table_contains(proxy_state->proxied_objects, object_path)) {
+    log_verbose("Object %s is already proxied", object_path);
+    if (need_lock) {
+      g_rw_lock_writer_unlock(&proxy_state->rw_lock);
+    }
+    return TRUE;
+  }
+
   // Create proxied object structure
   ProxiedObject *proxied_obj = g_new0(ProxiedObject, 1);
   proxied_obj->object_path = g_strdup(object_path);
@@ -387,13 +413,14 @@ static gboolean proxy_single_object(const char *object_path,
   proxied_obj->registration_ids =
       g_hash_table_new_full(g_str_hash, g_str_equal, g_free, nullptr);
 
-  static GDBusInterfaceVTable vtable = {
+  // Static vtable (shared across all calls)
+  static const GDBusInterfaceVTable vtable = {
       .method_call = handle_method_call_generic,
       .get_property = handle_get_property_generic,
       .set_property = handle_set_property_generic,
-      .padding = {0}};
+      .padding = {nullptr}};
 
-  int registered_count = 0;
+  guint registered_count = 0;
 
   // Register each interface (except standard ones)
   for (int i = 0; node_info->interfaces[i]; i++) {
