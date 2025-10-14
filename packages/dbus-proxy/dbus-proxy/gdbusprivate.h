@@ -7,6 +7,7 @@
  constexpr const char* DBUS_SIGNAL_INTERFACES_ADDED = "InterfacesAdded";
  constexpr const char* DBUS_SIGNAL_INTERFACES_REMOVED = "InterfacesRemoved";
  constexpr const char* DBUS_OBJECT_PATH = "/org/freedesktop";
+ constexpr const char* DBUS_OBJECT_PATH_DBUS = "/org/freedesktop/DBus";
  constexpr const char* DBUS_INTERFACE_INTROSPECTABLE = "org.freedesktop.DBus.Introspectable";
  constexpr const char* DBUS_INTERFACE_PROPERTIES = "org.freedesktop.DBus.Properties";
  constexpr const char* DBUS_INTERFACE_PEER = "org.freedesktop.DBus.Peer";
