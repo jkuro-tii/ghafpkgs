@@ -18,7 +18,7 @@ stdenv.mkDerivation {
 
   installPhase = ''
     mkdir -p $out/bin
-    install ./dbus-proxy $out/bin/dbus-proxy
+    install -Dm755 dbus-proxy $out/bin/dbus-proxy
   '';
 
   meta = {
@@ -28,5 +28,6 @@ stdenv.mkDerivation {
       "aarch64-linux"
     ];
     license = lib.licenses.asl20;
+    meta.mainProgram = "bin/dbus-proxy";
   };
 }
