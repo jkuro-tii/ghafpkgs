@@ -28,6 +28,6 @@ stdenv.mkDerivation {
       "aarch64-linux"
     ];
     license = lib.licenses.asl20;
-    mainProgram = "bin/dbus-proxy";
+    mainProgram = "dbus-proxy";
   };
 }
