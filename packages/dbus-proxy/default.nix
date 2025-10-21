@@ -4,6 +4,7 @@
   stdenv,
   cmake,
   gcc,
+  glib,
   pkg-config,
   pkgs,
   lib,
@@ -14,8 +15,8 @@ stdenv.mkDerivation {
 
   src = ./dbus-proxy;
 
-  nativeBuildInputs = [ cmake pkg-config];
-  buildInputs = [ glib gio ];
+  nativeBuildInputs = [ cmake pkg-config gcc];
+  buildInputs = [ glib ];
   sourceRoot = "./dbus-proxy";
   cmakeFlags = [
     "-DCMAKE_BUILD_TYPE=Release"
