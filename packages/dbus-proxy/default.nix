@@ -4,6 +4,7 @@
   stdenv,
   cmake,
   gcc,
+  pkg-config,
   pkgs,
   lib,
   ...
@@ -13,7 +14,7 @@ stdenv.mkDerivation {
 
   src = ./dbus-proxy;
 
-  nativeBuildInputs = [ cmake ];
+  nativeBuildInputs = [ cmake pkg-config];
   sourceRoot = "./dbus-proxy";
   cmakeFlags = [
     "-DCMAKE_BUILD_TYPE=Release"
