@@ -15,6 +15,7 @@ stdenv.mkDerivation {
   src = ./dbus-proxy;
 
   nativeBuildInputs = [ cmake pkg-config];
+  buildInputs = [ glib gio ];
   sourceRoot = "./dbus-proxy";
   cmakeFlags = [
     "-DCMAKE_BUILD_TYPE=Release"
