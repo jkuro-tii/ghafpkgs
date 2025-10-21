@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 {
   stdenv,
+  cmake,
+  gcc,
   pkgs,
   lib,
   ...
@@ -11,11 +13,12 @@ stdenv.mkDerivation {
 
   src = ./dbus-proxy;
 
-  nativeBuildInputs = [ pkgs.pkg-config ];
-  buildInputs = [ pkgs.glib ];
-
+  nativeBuildInputs = [ cmake ];
   sourceRoot = "./dbus-proxy";
-
+  cmakeFlags = [
+    "-DCMAKE_BUILD_TYPE=Release"
+    "-DBUILD_SHARED_LIBS=ON"
+  ];
   installPhase = ''
     mkdir -p $out/bin
     install -Dm755 dbus-proxy $out/bin/dbus-proxy
