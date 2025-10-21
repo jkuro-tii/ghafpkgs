@@ -1,3 +1,8 @@
+/*
+ Copyright 2025 TII (SSRC) and the Ghaf contributors
+ SPDX-License-Identifier: Apache-2.0
+ */
+
 #include "dbus_proxy.h"
 #include <gio/gio.h>
 #include <glib-unix.h>
@@ -688,7 +693,7 @@ void cleanup_proxy_state() {
     return;
 
   // Unregister secret agent
-    if (proxy_state->config.nm_mode) {
+  if (proxy_state->config.nm_mode) {
     unregister_nm_secret_agent();
     if (proxy_state->client_sender_name) {
       g_free(proxy_state->client_sender_name);

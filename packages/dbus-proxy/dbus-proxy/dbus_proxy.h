@@ -1,3 +1,8 @@
+/*
+ Copyright 2025 TII (SSRC) and the Ghaf contributors
+ SPDX-License-Identifier: Apache-2.0
+ */
+
 /* Shared header for dbus-proxy split files */
 #ifndef GHAF_DBUS_PROXY_H
 #define GHAF_DBUS_PROXY_H

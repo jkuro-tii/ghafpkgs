@@ -6,16 +6,19 @@
   gcc,
   glib,
   pkg-config,
-  pkgs,
   lib,
   ...
 }:
 stdenv.mkDerivation {
-  name = "dbus-proxy";
 
+  name = "dbus-proxy";
   src = ./dbus-proxy;
 
-  nativeBuildInputs = [ cmake pkg-config gcc];
+  nativeBuildInputs = [
+    cmake
+    pkg-config
+    gcc
+  ];
   buildInputs = [ glib ];
   sourceRoot = "./dbus-proxy";
   cmakeFlags = [

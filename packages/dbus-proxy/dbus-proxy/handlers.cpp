@@ -1,3 +1,8 @@
+/*
+ Copyright 2025 TII (SSRC) and the Ghaf contributors
+ SPDX-License-Identifier: Apache-2.0
+ */
+
 #include "dbus_proxy.h"
 #include <gio/gio.h>
 #include <glib.h>
