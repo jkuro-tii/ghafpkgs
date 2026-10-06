@@ -15,26 +15,25 @@
 #define LED_PROXY_VSOCK_PORT 9999
 
 enum led_msg_type {
-    LED_MSG_HELLO = 1,
-    LED_MSG_ADD_LED,
-    LED_MSG_SET_BRIGHTNESS,
-    LED_MSG_UPDATE,
-    LED_MSG_ERROR,
+  LED_MSG_HELLO = 1,
+  LED_MSG_ADD_LED,
+  LED_MSG_SET_BRIGHTNESS,
+  LED_MSG_UPDATE,
+  LED_MSG_ERROR,
 };
 
 struct led_msg_hdr {
-    uint16_t version;
-    uint16_t type;
-    union {
-        struct {
-            uint16_t length;
-            uint8_t max_brightness;
-        };
-        struct {
-            uint8_t led_index;
-            uint8_t brightness;
-        };
+  uint16_t version;
+  uint16_t type;
+  union {
+    struct {
+      uint16_t length;
+      uint8_t max_brightness;
     };
-
+    struct {
+      uint8_t led_index;
+      uint8_t brightness;
+    };
+  };
 };
 #endif // COMMON_PROTOCOL_H
