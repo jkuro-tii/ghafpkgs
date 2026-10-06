@@ -17,14 +17,33 @@
 
 #define LED_SYS_CLASS_PATH "/sys/class/leds/"
 
+int get_brightness(const char *led_name) {
+    char path[256];
+    snprintf(path, sizeof(path), LED_SYS_CLASS_PATH "%s/brightness", led_name);
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        perror("fopen");
+        return 255;
+    }
+    int brightness;
+    if (fscanf(f, "%d", &brightness) != 1) {
+        perror("fscanf");
+        fclose(f);
+        return 255;
+    }
+    fclose(f);
+    return brightness;
+}
+
 static int host_leds_send_list(const int socket_fd, const char **led_names, int led_count) {
     for (int i = 0; i < led_count; i++) {
         // Send each LED name over the socket here.
         fprintf(stderr, "Sending LED name: %s\n", led_names[i]);
         struct led_msg_hdr hdr;
         hdr.version = LED_PROXY_VERSION;
-        hdr.type = LED_MSG_LIST;
+        hdr.type = LED_MSG_ADD_LED;
         hdr.length = strlen(led_names[i]) + 1; // Include null terminator
+        hdr.payload[0] = get_brightness(led_names[i]);
         if (write(socket_fd, &hdr, sizeof(hdr)) < 0) {
             perror("write");
             return -1;

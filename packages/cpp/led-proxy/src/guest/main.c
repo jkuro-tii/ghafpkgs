@@ -18,27 +18,35 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#define MAX_LEDS (16)
 struct proxy_led {
     const char *name;
     int max_brightness;
     int fd;
-};
+} leds[MAX_LEDS];
+
+static int led_count = 0;
 
 #include "common/protocol.h"
 
-static int guest_uleds_handle_list(const int socket_fd, const struct led_msg_hdr *hdr) {
+static int guest_uleds_handle_add_led(const int socket_fd, const struct led_msg_hdr *hdr) {
 
-    // Implement the handling of LED_MSG_LIST message here
-    // For now, just return 0 to indicate success
-
-    // Receive and handle the LED from the host
+    // Receive and handle the add LED request from the host
+    if (led_count >= MAX_LEDS) {
+        fprintf(stderr, "Maximum number of LEDs reached\n");
+        return -1;
+    }
     size_t len = hdr->length;
     char buf[len];  
     if (read(socket_fd, buf, len) < 0) {
         perror("read");
         return -1;
     }
-    fprintf(stderr, "Received LED name: %s\n", buf);
+    fprintf(stderr, "Received LED name: %s brightness:%d\n", buf, hdr->payload[0]);
+    leds[led_count].name = strdup(buf);
+    leds[led_count].max_brightness = 255; // Default max brightness
+    leds[led_count].fd = -1; // Not yet opened
+    led_count++;
 
     return 0;
 }
@@ -63,10 +71,10 @@ int guest_uleds_run(const int socket_fd) {
             perror("read");
             return -1;
         }
-        if (hdr.type == LED_MSG_LIST) {
-            // handle LED_MSG_LIST message here
-            if (guest_uleds_handle_list(socket_fd, &hdr) < 0) {
-                perror("guest_uleds_handle_list");
+        if (hdr.type == LED_MSG_ADD_LED) {
+            // handle LED_MSG_ADD_LED message here
+            if (guest_uleds_handle_add_led(socket_fd, &hdr) < 0) {
+                perror("guest_uleds_handle_add_led");
                 return -1;
             }
         }
