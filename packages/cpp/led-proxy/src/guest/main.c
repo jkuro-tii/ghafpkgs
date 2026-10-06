@@ -25,10 +25,30 @@ struct proxy_led {
     int fd;
 } leds[MAX_LEDS];
 
+// jarekk: TODO: close everything on exit
+
 static int led_count = 0;
+struct pollfd pollfds[MAX_LEDS + 1];
 
 #include "common/protocol.h"
 
+static void cleanup() {
+    for (int i = 0; i < led_count; i++) {
+        if (leds[i].fd >= 0) {
+            close(leds[i].fd);
+            leds[i].fd = -1;
+        }
+        free(leds[i].name);
+        leds[i].name = NULL;
+    }
+    close(pollfds[0].fd);
+    led_count = 0;
+    for (int i = 0; i < MAX_LEDS + 1; i++) {
+        pollfds[i].fd = -1;
+        pollfds[i].events = 0;
+        pollfds[i].revents = 0;
+    }
+}
 static int register_uled(struct proxy_led *led)
 {
     struct uleds_user_dev dev;
@@ -77,13 +97,13 @@ static int register_uled(struct proxy_led *led)
     return 0;
 }
 
-static int guest_uleds_handle_add_led(const int socket_fd, const struct led_msg_hdr *hdr) {
+static int guest_uleds_handle_add_led(const struct led_msg_hdr *hdr) {
 
     // Receive and handle the add LED request from the host
     size_t len = hdr->length;
     char buf[len];  
 
-    if (read(socket_fd, buf, len) < 0) {
+    if (read(pollfds[0].fd, buf, len) < 0) {
         perror("read");
         return -1;
     }
@@ -114,41 +134,56 @@ static int guest_uleds_handle_add_led(const int socket_fd, const struct led_msg_
     return 0;
 }
 
-int guest_uleds_run(const int socket_fd) {
+int guest_uleds_run() {
     // send HELLO message to the host
     struct led_msg_hdr hdr;
     hdr.version = LED_PROXY_VERSION;
     hdr.type = LED_MSG_HELLO;
     hdr.length = 0;
-    if (write(socket_fd, &hdr, sizeof(hdr)) < 0) {
-        perror("write");
+    if (write(pollfds[0].fd, &hdr, sizeof(hdr)) < 0) {
+        perror("write to host");
         return -1;
     }
 
     // run the uleds event loop
+    // wait for events on the pollfds array
     for (;;) {
         // handle incoming messages from the host here
         struct led_msg_hdr hdr;
-        ssize_t bytes_read = read(socket_fd, &hdr, sizeof(hdr));
-        if (bytes_read < 0) {
-            perror("read");
+        int ret = poll(pollfds, 1, -1);
+        if (ret < 0) {
+            perror("poll");
             return -1;
         }
-        if (hdr.type == LED_MSG_ADD_LED) {
-            // handle LED_MSG_ADD_LED message here
-            if (guest_uleds_handle_add_led(socket_fd, &hdr) < 0) {
-                perror("guest_uleds_handle_add_led");
-                return -1;
+
+        for (int i = 0; i < led_count+1; i++) {
+            // check for events from the host via the pollfds array
+            if (pollfds[0].revents & POLLIN) {
+                ssize_t bytes_read = read(pollfds[0].fd, &hdr, sizeof(hdr));
+                if (bytes_read < 0) {
+                    perror("read");
+                    return -1;
+                }            
+                if (hdr.type == LED_MSG_ADD_LED) {
+                    if (guest_uleds_handle_add_led(&hdr) < 0) {
+                        perror("guest_uleds_handle_add_led");
+                        return -1;
+                    }
+                    pollfds[led_count].fd = leds[led_count - 1].fd;
+                    pollfds[led_count].events = POLLIN;
+                    pollfds[led_count].revents = 0;
+                } else  {   
+                    fprintf(stderr, "Unknown message type: %d\n", hdr.type);
+                }
             }
+
+            if (pollfds[i].revents & POLLOUT) {
+                // handle writable event for LED i here
+                fprintf(stderr, "LED %d (%s) is being written to (fd=%d)\n", i, leds[i].name, pollfds[i].fd);
+            }
+
         }
-        // jarekk: delete?
-        // if (hdr.type == LED_MSG_SET) {
-        //     // handle LED_MSG_SET message here
-        //     if (guest_uleds_handle_set(socket_fd, &hdr) < 0) {
-        //         perror("guest_uleds_handle_set");
-        //         break;
-        //     }
-        // }
+
     }
 
     return 0;
@@ -202,5 +237,11 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    return guest_uleds_run(socket_fd);
+    pollfds[0].fd = socket_fd;
+    pollfds[0].events = POLLIN;
+    pollfds[0].revents = 0;
+
+    int ret = guest_uleds_run();
+    cleanup();
+    return ret;
 }
