@@ -178,7 +178,7 @@ int guest_uleds_run() {
             }
         }
         for (int i = 1; i < led_count+1; i++) {
-            if (pollfds[i].revents & POLLOUT) {
+            if (pollfds[i].revents /* & POLLOUT*/) {
                 // handle writable event for LED i here
                 fprintf(stderr, "LED %d (%s) is being written to (fd=%d)\n", i, leds[i].name, pollfds[i].fd);
             }
