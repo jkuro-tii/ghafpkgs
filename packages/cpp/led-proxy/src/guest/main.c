@@ -150,6 +150,7 @@ int guest_uleds_run() {
     for (;;) {
         // handle incoming messages from the host here
         struct led_msg_hdr hdr;
+        fprintf(stderr, "poll led_count: %d\n", led_count);
         int ret = poll(pollfds, led_count+1, -1);
         fprintf(stderr, "poll returned: %d\n", ret);
         if (ret < 0) {
