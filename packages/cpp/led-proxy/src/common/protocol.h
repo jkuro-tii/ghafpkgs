@@ -26,12 +26,14 @@ struct led_msg_hdr {
     uint16_t version;
     uint16_t type;
     union {
-        uint32_t length;
+        struct {
+            uint16_t length;
+            uint8_t max_brightness;
+        };
         struct {
             uint8_t led_index;
             uint8_t brightness;
         };
-        uint8_t max_brightness;
     };
 
 };
