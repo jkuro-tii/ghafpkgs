@@ -134,6 +134,26 @@ static int guest_uleds_handle_add_led(const struct led_msg_hdr *hdr) {
     return 0;
 }
 
+int read_brightness(int fd) {
+    int brightness;
+    ssize_t n;
+    do {
+        n = read(fd, &brightness, sizeof(brightness));
+    } while (n < 0 && errno == EINTR);
+
+    if (n < 0) {
+        perror("read_brightness");
+        return -1;
+    }
+
+    if (n != (ssize_t)sizeof(brightness)) {
+        fprintf(stderr, "short read_brightness: %zd/%zu\n", n, sizeof(brightness));
+        return -1;
+    }
+
+    return brightness;
+}
+
 int guest_uleds_run() {
     // send HELLO message to the host
     struct led_msg_hdr hdr;
@@ -178,9 +198,16 @@ int guest_uleds_run() {
             }
         }
         for (int i = 1; i < led_count+1; i++) {
-            if (pollfds[i].revents /* & POLLOUT*/) {
+            if (pollfds[i].revents & POLLIN) {
                 // handle writable event for LED i here
                 fprintf(stderr, "LED %d (%s) event=0x%x is being written to (fd=%d)\n", i, leds[i-1].name, pollfds[i].revents, pollfds[i].fd);
+                int brightness = read_brightness(pollfds[i].fd);
+                fprintf(stderr, "LED %d (%s) brightness=%d\n", i, leds[i-1].name, brightness);
+                if (brightness < 0) {
+                    fprintf(stderr, "Failed to read brightness for LED %d (%s)\n", i, leds[i-1].name);
+                } else {
+                    fprintf(stderr, "Successfully read brightness for LED %d (%s): %d\n", i, leds[i-1].name, brightness);
+                }
                 pollfds[i].revents = 0;
             }
 
