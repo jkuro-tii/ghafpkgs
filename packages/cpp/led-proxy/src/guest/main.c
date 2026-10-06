@@ -123,7 +123,7 @@ static int guest_uleds_handle_add_led(const struct led_msg_hdr *hdr) {
     leds[led_count].fd = -1; // Not yet opened
     led_count++;
 
-    // Add LED to /dev/uleds here. This typically involves opening the corresponding device file and storing the file descriptor in leds[led_count].fd.
+    // Add LED to /dev/uleds here.
     if (register_uled(&leds[led_count - 1]) < 0) {
         fprintf(stderr, "Failed to register LED %s\n", leds[led_count - 1].name);
         free(leds[led_count - 1].name);
@@ -168,8 +168,6 @@ int guest_uleds_run() {
     // run the uleds event loop
     // wait for events on the pollfds array
     for (;;) {
-        // handle incoming messages from the host here
-        struct led_msg_hdr hdr;
         int ret = poll(pollfds, led_count+1, -1);
         if (ret < 0) {
             perror("poll");
@@ -178,6 +176,8 @@ int guest_uleds_run() {
 
         // check for events from the host
         if (pollfds[0].revents & POLLIN) {
+            // handle incoming messages from the host here
+            struct led_msg_hdr hdr;
             ssize_t bytes_read = read(pollfds[0].fd, &hdr, sizeof(hdr));
             if (bytes_read < 0) {
                 perror("read");
