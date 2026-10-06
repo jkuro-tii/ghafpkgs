@@ -24,10 +24,13 @@ struct proxy_led {
     int fd;
 };
 
-#include "guest/uleds.h"
 #include "common/protocol.h"
 
-
+static int guest_uleds_handle_list(const int socket_fd, const struct led_msg_hdr *hdr) {
+    // Implement the handling of LED_MSG_LIST message here
+    // For now, just return 0 to indicate success
+    return 0;
+}
 
 int guest_uleds_run(const int socket_fd) {
     // send HELLO message to the host
@@ -47,24 +50,26 @@ int guest_uleds_run(const int socket_fd) {
         ssize_t bytes_read = read(socket_fd, &hdr, sizeof(hdr));
         if (bytes_read < 0) {
             perror("read");
-            break;
+            return -1;
         }
         if (hdr.type == LED_MSG_LIST) {
             // handle LED_MSG_LIST message here
             if (guest_uleds_handle_list(socket_fd, &hdr) < 0) {
                 perror("guest_uleds_handle_list");
-                break;
+                return -1;
             }
         }
-        if (hdr.type == LED_MSG_SET) {
-            // handle LED_MSG_SET message here
-            if (guest_uleds_handle_set(socket_fd, &hdr) < 0) {
-                perror("guest_uleds_handle_set");
-                break;
-            }
-        }
+        // jarekk: delete?
+        // if (hdr.type == LED_MSG_SET) {
+        //     // handle LED_MSG_SET message here
+        //     if (guest_uleds_handle_set(socket_fd, &hdr) < 0) {
+        //         perror("guest_uleds_handle_set");
+        //         break;
+        //     }
+        // }
     }
 
+    return 0;
 }
 
 int main(int argc, char *argv[]) {
