@@ -170,9 +170,7 @@ int guest_uleds_run() {
     for (;;) {
         // handle incoming messages from the host here
         struct led_msg_hdr hdr;
-        fprintf(stderr, "poll led_count: %d\n", led_count);
         int ret = poll(pollfds, led_count+1, -1);
-        fprintf(stderr, "poll returned: %d\n", ret);
         if (ret < 0) {
             perror("poll");
             return -1;
@@ -200,9 +198,7 @@ int guest_uleds_run() {
         for (int i = 1; i < led_count+1; i++) {
             if (pollfds[i].revents & POLLIN) {
                 // handle writable event for LED i here
-                fprintf(stderr, "LED %d (%s) event=0x%x is being written to (fd=%d)\n", i, leds[i-1].name, pollfds[i].revents, pollfds[i].fd);
                 int brightness = read_brightness(pollfds[i].fd);
-                fprintf(stderr, "LED %d (%s) brightness=%d\n", i, leds[i-1].name, brightness);
                 if (brightness < 0) {
                     fprintf(stderr, "Failed to read brightness for LED %d (%s)\n", i, leds[i-1].name);
                 } else {
