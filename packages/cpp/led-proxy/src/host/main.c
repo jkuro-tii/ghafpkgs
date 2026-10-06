@@ -17,7 +17,7 @@
 
 #define LED_SYS_CLASS_PATH "/sys/class/leds/"
 
-int get_brightness(const char *led_name) {
+int get_max_brightness(const char *led_name) {
     char path[256];
     snprintf(path, sizeof(path), LED_SYS_CLASS_PATH "%s/max_brightness", led_name);
     FILE *f = fopen(path, "r");
@@ -43,7 +43,7 @@ static int host_leds_send_list(const int socket_fd, const char **led_names, int 
         hdr.version = LED_PROXY_VERSION;
         hdr.type = LED_MSG_ADD_LED;
         hdr.length = strlen(led_names[i]) + 1; // Include null terminator
-        hdr.payload[0] = get_brightness(led_names[i]);
+        hdr.max_brightness = get_max_brightness(led_names[i]);
         if (write(socket_fd, &hdr, sizeof(hdr)) < 0) {
             perror("write");
             return -1;
@@ -56,20 +56,21 @@ static int host_leds_send_list(const int socket_fd, const char **led_names, int 
     return 0;
 }
 
-static int host_leds_set(const int socket_fd, const struct led_msg_hdr *hdr) {
+static int host_leds_set(const char **led_names, const struct led_msg_hdr *hdr) {
     static char buf[256] = LED_SYS_CLASS_PATH; // Buffer to hold the message payload
     size_t prefix_len = strlen(LED_SYS_CLASS_PATH);
 
     fprintf(stderr, "Handling LED_MSG_SET message\n");
 
-    if (read(socket_fd, buf + prefix_len, sizeof(buf) - prefix_len) < 0) {
-        perror("read");
+    sprintf(buf + prefix_len, "%s/brightness", led_names[hdr->led_index]);
+
+    FILE *f = fopen(buf, "w");
+    if (!f) {
+        perror("fopen");
         return -1;
     }
-
-
-    // extract the LED name and value from the message payload here.
-    
+    fprintf(f, "%d\n", hdr->brightness);
+    fclose(f);
 
     return 0;
 }
@@ -98,10 +99,10 @@ static int host_leds_handle_client(int client_fd, const char **led_names, int le
             }
             continue;
         }
-        if (hdr.type == LED_MSG_SET) {
+        if (hdr.type == LED_MSG_SET_BRIGHTNESS) {
             // Handle LED_MSG_SET message here.
-            fprintf(stderr, "Received LED_MSG_SET message\n");
-            if (host_leds_set(client_fd, &hdr) < 0) {
+            fprintf(stderr, "Received LED_MSG_SET_BRIGHTNESS message\n");
+            if (host_leds_set(led_names, &hdr) < 0) {
                 perror("host_leds_set");
                 break;
             }

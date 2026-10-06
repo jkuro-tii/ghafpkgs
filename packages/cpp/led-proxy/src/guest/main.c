@@ -107,7 +107,7 @@ static int guest_uleds_handle_add_led(const struct led_msg_hdr *hdr) {
         perror("read");
         return -1;
     }
-    fprintf(stderr, "Received LED name: %s max_brightness:%d\n", buf, hdr->payload[0]);
+    fprintf(stderr, "Received LED name: %s max_brightness:%d\n", buf, hdr->max_brightness);
     if (led_count >= MAX_LEDS) {
         fprintf(stderr, "Maximum number of LEDs reached\n");
         return -1;
@@ -119,7 +119,7 @@ static int guest_uleds_handle_add_led(const struct led_msg_hdr *hdr) {
         free(leds[led_count].name);
         return -1;
     }
-    leds[led_count].max_brightness = hdr->payload[0];
+    leds[led_count].max_brightness = hdr->max_brightness;
     leds[led_count].fd = -1; // Not yet opened
     led_count++;
 
@@ -154,6 +154,24 @@ int read_brightness(int fd) {
     return brightness;
 }
 
+void set_brightness(int led_index, int brightness) {
+    // Send brightness update to the host
+    struct led_msg_hdr hdr;
+    hdr.version = LED_PROXY_VERSION;
+    hdr.type = LED_MSG_SET_BRIGHTNESS;
+    hdr.led_index = led_index;
+    hdr.brightness = brightness;
+    if (write(pollfds[0].fd, &hdr, sizeof(hdr)) < 0) {
+        perror("write to host");
+        return;
+    }
+    if (write(pollfds[0].fd, &brightness, sizeof(brightness)) < 0) {
+        perror("write brightness to host");
+        return;
+    }
+    fprintf(stderr, "Sent brightness update for LED %d: %d\n", led_index, brightness);
+}
+
 int guest_uleds_run() {
     // send HELLO message to the host
     struct led_msg_hdr hdr;
@@ -177,7 +195,6 @@ int guest_uleds_run() {
         // check for events from the host
         if (pollfds[0].revents & POLLIN) {
             // handle incoming messages from the host here
-            struct led_msg_hdr hdr;
             ssize_t bytes_read = read(pollfds[0].fd, &hdr, sizeof(hdr));
             if (bytes_read < 0) {
                 perror("read");
@@ -203,6 +220,7 @@ int guest_uleds_run() {
                     fprintf(stderr, "Failed to read brightness for LED %d (%s)\n", i, leds[i-1].name);
                 } else {
                     fprintf(stderr, "Successfully read brightness for LED %d (%s): %d\n", i, leds[i-1].name, brightness);
+                    set_brightness(i-1, brightness);
                 }
                 pollfds[i].revents = 0;
             }

@@ -17,7 +17,7 @@
 enum led_msg_type {
     LED_MSG_HELLO = 1,
     LED_MSG_ADD_LED,
-    LED_MSG_SET,
+    LED_MSG_SET_BRIGHTNESS,
     LED_MSG_UPDATE,
     LED_MSG_ERROR,
 };
@@ -25,7 +25,14 @@ enum led_msg_type {
 struct led_msg_hdr {
     uint16_t version;
     uint16_t type;
-    uint32_t length;
-    uint8_t payload[1]; // Flexible array member for the message payload
+    union {
+        uint32_t length;
+        struct {
+            uint8_t led_index;
+            uint8_t brightness;
+        };
+        uint8_t max_brightness;
+    };
+
 };
 #endif // COMMON_PROTOCOL_H
