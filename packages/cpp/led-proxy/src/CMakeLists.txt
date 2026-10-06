@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2022-2026 TII (SSRC) and the Ghaf contributors
+# SPDX-FileCopyrightText: 2022-2026 TII (CRC) and the Ghaf contributors
 # SPDX-License-Identifier: Apache-2.0
 cmake_minimum_required(VERSION 3.16)
 project(leds-proxy C)
@@ -34,10 +34,10 @@ add_executable(guest-led-proxy
 )
 
 target_include_directories(host-led-proxy PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/common
+    ${CMAKE_CURRENT_SOURCE_DIR}
 )
 target_include_directories(guest-led-proxy PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/common
+    ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 target_compile_options(host-led-proxy PRIVATE -Wall -Wextra)
