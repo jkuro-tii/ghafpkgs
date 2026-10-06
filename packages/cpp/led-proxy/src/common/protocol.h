@@ -26,6 +26,6 @@ struct led_msg_hdr {
     uint16_t version;
     uint16_t type;
     uint32_t length;
-    uint8_t payload[0]; // Flexible array member for the message payload
+    uint8_t payload[1]; // Flexible array member for the message payload
 };
 #endif // COMMON_PROTOCOL_H
