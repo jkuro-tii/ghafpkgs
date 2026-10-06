@@ -20,7 +20,7 @@
 
 #define MAX_LEDS (16)
 struct proxy_led {
-    const char *name;
+    char *name;
     int max_brightness;
     int fd;
 } leds[MAX_LEDS];
@@ -29,24 +29,87 @@ static int led_count = 0;
 
 #include "common/protocol.h"
 
+static int register_uled(struct proxy_led *led)
+{
+    struct uleds_user_dev dev;
+    ssize_t n;
+    size_t name_len;
+
+    memset(&dev, 0, sizeof(dev));
+    name_len = strlen(led->name);
+    memcpy(dev.name, led->name, name_len + 1);
+    dev.max_brightness = led->max_brightness;
+
+    led->fd = open("/dev/uleds", O_RDWR | O_CLOEXEC);
+    if (led->fd < 0) {
+        fprintf(stderr,
+                "%s: open(/dev/uleds): %s\n",
+                led->name,
+                strerror(errno));
+        return -1;
+    }
+
+    do {
+        n = write(led->fd, &dev, sizeof(dev));
+    } while (n < 0 && errno == EINTR);
+
+    if (n < 0) {
+        fprintf(stderr,
+                "%s: write registration: %s\n",
+                led->name,
+                strerror(errno));
+        close(led->fd);
+        led->fd = -1;
+        return -1;
+    }
+
+    if (n != (ssize_t)sizeof(dev)) {
+        fprintf(stderr,
+                "%s: short registration write: %zd/%zu\n",
+                led->name,
+                n,
+                sizeof(dev));
+        close(led->fd);
+        led->fd = -1;
+        return -1;
+    }
+
+    return 0;
+}
+
 static int guest_uleds_handle_add_led(const int socket_fd, const struct led_msg_hdr *hdr) {
 
     // Receive and handle the add LED request from the host
-    if (led_count >= MAX_LEDS) {
-        fprintf(stderr, "Maximum number of LEDs reached\n");
-        return -1;
-    }
     size_t len = hdr->length;
     char buf[len];  
+
     if (read(socket_fd, buf, len) < 0) {
         perror("read");
         return -1;
     }
     fprintf(stderr, "Received LED name: %s max_brightness:%d\n", buf, hdr->payload[0]);
+    if (led_count >= MAX_LEDS) {
+        fprintf(stderr, "Maximum number of LEDs reached\n");
+        return -1;
+    }
+
     leds[led_count].name = strdup(buf);
-    leds[led_count].max_brightness = 255; // Default max brightness
+    if (strlen(leds[led_count].name) >= LED_MAX_NAME_SIZE ) {
+        fprintf(stderr, "LED name is too long; maximum is %d characters\n", LED_MAX_NAME_SIZE - 1);
+        free(leds[led_count].name);
+        return -1;
+    }
+    leds[led_count].max_brightness = hdr->payload[0];
     leds[led_count].fd = -1; // Not yet opened
     led_count++;
+
+    // Add LED to /dev/uleds here. This typically involves opening the corresponding device file and storing the file descriptor in leds[led_count].fd.
+    if (register_uled(&leds[led_count - 1]) < 0) {
+        fprintf(stderr, "Failed to register LED %s\n", leds[led_count - 1].name);
+        free(leds[led_count - 1].name);
+        led_count--;
+        return -1;
+    }
 
     return 0;
 }
