@@ -42,7 +42,7 @@ static int guest_uleds_handle_add_led(const int socket_fd, const struct led_msg_
         perror("read");
         return -1;
     }
-    fprintf(stderr, "Received LED name: %s brightness:%d\n", buf, hdr->payload[0]);
+    fprintf(stderr, "Received LED name: %s max_brightness:%d\n", buf, hdr->payload[0]);
     leds[led_count].name = strdup(buf);
     leds[led_count].max_brightness = 255; // Default max brightness
     leds[led_count].fd = -1; // Not yet opened

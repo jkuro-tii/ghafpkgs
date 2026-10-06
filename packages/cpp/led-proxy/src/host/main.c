@@ -19,7 +19,7 @@
 
 int get_brightness(const char *led_name) {
     char path[256];
-    snprintf(path, sizeof(path), LED_SYS_CLASS_PATH "%s/brightness", led_name);
+    snprintf(path, sizeof(path), LED_SYS_CLASS_PATH "%s/max_brightness", led_name);
     FILE *f = fopen(path, "r");
     if (!f) {
         perror("fopen");
