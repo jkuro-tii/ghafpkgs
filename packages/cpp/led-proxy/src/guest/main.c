@@ -158,27 +158,26 @@ int guest_uleds_run() {
             return -1;
         }
 
-        for (int i = 0; i < led_count+1; i++) {
-            // check for events from the host via the pollfds array
-            if (pollfds[0].revents & POLLIN) {
-                ssize_t bytes_read = read(pollfds[0].fd, &hdr, sizeof(hdr));
-                if (bytes_read < 0) {
-                    perror("read");
+        // check for events from the host
+        if (pollfds[0].revents & POLLIN) {
+            ssize_t bytes_read = read(pollfds[0].fd, &hdr, sizeof(hdr));
+            if (bytes_read < 0) {
+                perror("read");
+                return -1;
+            }            
+            if (hdr.type == LED_MSG_ADD_LED) {
+                if (guest_uleds_handle_add_led(&hdr) < 0) {
+                    perror("guest_uleds_handle_add_led");
                     return -1;
-                }            
-                if (hdr.type == LED_MSG_ADD_LED) {
-                    if (guest_uleds_handle_add_led(&hdr) < 0) {
-                        perror("guest_uleds_handle_add_led");
-                        return -1;
-                    }
-                    pollfds[led_count].fd = leds[led_count - 1].fd;
-                    pollfds[led_count].events = POLLIN;
-                    pollfds[led_count].revents = 0;
-                } else  {   
-                    fprintf(stderr, "Unknown message type: %d\n", hdr.type);
                 }
+                pollfds[led_count].fd = leds[led_count - 1].fd;
+                pollfds[led_count].events = POLLIN;
+                pollfds[led_count].revents = 0;
+            } else  {   
+                fprintf(stderr, "Unknown message type: %d\n", hdr.type);
             }
-
+        }
+        for (int i = 1; i < led_count+1; i++) {
             if (pollfds[i].revents & POLLOUT) {
                 // handle writable event for LED i here
                 fprintf(stderr, "LED %d (%s) is being written to (fd=%d)\n", i, leds[i].name, pollfds[i].fd);
