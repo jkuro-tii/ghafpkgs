@@ -68,6 +68,11 @@ static int host_leds_handle_client(int client_fd, const char **led_names, int le
         }
         if (hdr.type == LED_MSG_HELLO) {
             // send list of all LED interfaces
+            // check protocol version
+            if (hdr.version != LED_PROXY_VERSION) {
+                fprintf(stderr, "Unsupported protocol version: %u\n", hdr.version);
+                break;
+            }
             if (host_leds_send_list(client_fd, led_names, led_count) < 0) {
                 perror("host_leds_send_list");
                 break;

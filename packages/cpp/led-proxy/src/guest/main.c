@@ -27,8 +27,19 @@ struct proxy_led {
 #include "common/protocol.h"
 
 static int guest_uleds_handle_list(const int socket_fd, const struct led_msg_hdr *hdr) {
+
     // Implement the handling of LED_MSG_LIST message here
     // For now, just return 0 to indicate success
+
+    // Receive and handle the LED from the host
+    size_t len = hdr->length;
+    char buf[len];  
+    if (read(socket_fd, buf, len) < 0) {
+        perror("read");
+        return -1;
+    }
+    fprintf(stderr, "Received LED name: %s\n", buf);
+
     return 0;
 }
 
