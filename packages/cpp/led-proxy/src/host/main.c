@@ -185,6 +185,11 @@ static int host_leds_run(unsigned int vsock_port, unsigned int allowed_cid) {
     struct sockaddr_vm peer_addr;
     socklen_t peer_len = sizeof(peer_addr);
     int client_fd = accept(listen_fd, (struct sockaddr *)&peer_addr, &peer_len);
+    if (stop_requested) {
+      close(listen_fd);
+      LOG_DEBUG("Stop requested, exiting accept loop");
+      break;
+    }
     if (client_fd < 0) {
       LOG_ERROR("accept: %s", strerror(errno));
       break;
