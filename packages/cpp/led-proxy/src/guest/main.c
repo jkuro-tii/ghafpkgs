@@ -179,7 +179,7 @@ int guest_uleds_run() {
   // run the uleds event loop
   // wait for events on the pollfds array
   for (;;) {
-    int ret = poll(pollfds, led_count + 1, -1);
+    int ret = poll(pollfds, led_count + 1, -1); // zero element is the host connection
     if (ret < 0) {
       LOG_ERROR("poll: %s", strerror(errno));
       return -1;
