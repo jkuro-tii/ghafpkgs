@@ -155,10 +155,6 @@ void set_brightness(int led_index, int brightness) {
   hdr.led_index = led_index;
   hdr.brightness = brightness;
   if (write(pollfds[0].fd, &hdr, sizeof(hdr)) < 0) {
-    LOG_ERROR("write to host: %s", strerror(errno));
-    return;
-  }
-  if (write(pollfds[0].fd, &brightness, sizeof(brightness)) < 0) {
     LOG_ERROR("write brightness to host: %s", strerror(errno));
     return;
   }
