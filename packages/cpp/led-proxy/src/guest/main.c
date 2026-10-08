@@ -222,7 +222,7 @@ int guest_uleds_run() {
                     leds[i - 1].name);
         } else {
           LOG_DEBUG("Successfully read brightness for LED %d (%s): %d", i,
-                     leds[i - 1].name, brightness);
+                    leds[i - 1].name, brightness);
           set_brightness(i - 1, brightness);
         }
         pollfds[i].revents = 0;
