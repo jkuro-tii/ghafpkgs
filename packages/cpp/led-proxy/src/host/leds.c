@@ -7,6 +7,8 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "common/log.h"
+
 extern int led_count;
 extern const char **led_names;
 
@@ -18,20 +20,20 @@ int host_leds_check_exist(void) {
     int written =
         snprintf(path, sizeof(path), "%s/%s", LEDS_SYSFS_BASE, led_names[i]);
     if (written < 0 || (size_t)written >= sizeof(path)) {
-      fprintf(stderr, "Error: LED name too long: %s\n", led_names[i]);
+      LOG_ERROR("LED name too long: %s", led_names[i]);
       all_ok = 0;
       continue;
     }
 
     struct stat st;
     if (stat(path, &st) != 0) {
-      fprintf(stderr, "Error: LED interface not found: %s\n", path);
+      LOG_ERROR("LED interface not found: %s", path);
       all_ok = 0;
       continue;
     }
 
     if (!S_ISDIR(st.st_mode)) {
-      fprintf(stderr, "Error: LED path is not a directory: %s\n", path);
+      LOG_ERROR("LED path is not a directory: %s", path);
       all_ok = 0;
       continue;
     }

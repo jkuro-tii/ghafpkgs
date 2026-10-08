@@ -30,6 +30,7 @@ struct proxy_led {
 static int led_count = 0;
 struct pollfd pollfds[MAX_LEDS + 1];
 
+#include "common/log.h"
 #include "common/protocol.h"
 
 static void cleanup() {
@@ -61,7 +62,7 @@ static int register_uled(struct proxy_led *led) {
 
   led->fd = open("/dev/uleds", O_RDWR | O_CLOEXEC);
   if (led->fd < 0) {
-    fprintf(stderr, "%s: open(/dev/uleds): %s\n", led->name, strerror(errno));
+    LOG_ERROR("%s: open(/dev/uleds): %s", led->name, strerror(errno));
     return -1;
   }
 
@@ -70,15 +71,15 @@ static int register_uled(struct proxy_led *led) {
   } while (n < 0 && errno == EINTR);
 
   if (n < 0) {
-    fprintf(stderr, "%s: write registration: %s\n", led->name, strerror(errno));
+    LOG_ERROR("%s: write registration: %s", led->name, strerror(errno));
     close(led->fd);
     led->fd = -1;
     return -1;
   }
 
   if (n != (ssize_t)sizeof(dev)) {
-    fprintf(stderr, "%s: short registration write: %zd/%zu\n", led->name, n,
-            sizeof(dev));
+    LOG_ERROR("%s: short registration write: %zd/%zu", led->name, n,
+              sizeof(dev));
     close(led->fd);
     led->fd = -1;
     return -1;
@@ -94,20 +95,20 @@ static int guest_uleds_handle_add_led(const struct led_msg_hdr *hdr) {
   char buf[len];
 
   if (read(pollfds[0].fd, buf, len) < 0) {
-    perror("read");
+    LOG_ERROR("read: %s", strerror(errno));
     return -1;
   }
-  fprintf(stderr, "Received LED name: %s max_brightness:%d\n", buf,
-          hdr->max_brightness);
+  LOG_DEBUG("Received LED name: %s max_brightness:%d", buf,
+            hdr->max_brightness);
   if (led_count >= MAX_LEDS) {
-    fprintf(stderr, "Maximum number of LEDs reached\n");
+    LOG_ERROR("Maximum number of LEDs reached");
     return -1;
   }
 
   leds[led_count].name = strdup(buf);
   if (strlen(leds[led_count].name) >= LED_MAX_NAME_SIZE) {
-    fprintf(stderr, "LED name is too long; maximum is %d characters\n",
-            LED_MAX_NAME_SIZE - 1);
+    LOG_ERROR("LED name is too long; maximum is %d characters",
+              LED_MAX_NAME_SIZE - 1);
     free(leds[led_count].name);
     return -1;
   }
@@ -117,7 +118,7 @@ static int guest_uleds_handle_add_led(const struct led_msg_hdr *hdr) {
 
   // Add LED to /dev/uleds here.
   if (register_uled(&leds[led_count - 1]) < 0) {
-    fprintf(stderr, "Failed to register LED %s\n", leds[led_count - 1].name);
+    LOG_ERROR("Failed to register LED %s", leds[led_count - 1].name);
     free(leds[led_count - 1].name);
     led_count--;
     return -1;
@@ -134,12 +135,12 @@ int read_brightness(int fd) {
   } while (n < 0 && errno == EINTR);
 
   if (n < 0) {
-    perror("read_brightness");
+    LOG_ERROR("read_brightness: %s", strerror(errno));
     return -1;
   }
 
   if (n != (ssize_t)sizeof(brightness)) {
-    fprintf(stderr, "short read_brightness: %zd/%zu\n", n, sizeof(brightness));
+    LOG_ERROR("short read_brightness: %zd/%zu", n, sizeof(brightness));
     return -1;
   }
 
@@ -154,15 +155,14 @@ void set_brightness(int led_index, int brightness) {
   hdr.led_index = led_index;
   hdr.brightness = brightness;
   if (write(pollfds[0].fd, &hdr, sizeof(hdr)) < 0) {
-    perror("write to host");
+    LOG_ERROR("write to host: %s", strerror(errno));
     return;
   }
   if (write(pollfds[0].fd, &brightness, sizeof(brightness)) < 0) {
-    perror("write brightness to host");
+    LOG_ERROR("write brightness to host: %s", strerror(errno));
     return;
   }
-  fprintf(stderr, "Sent brightness update for LED %d: %d\n", led_index,
-          brightness);
+  LOG_DEBUG("Sent brightness update for LED %d: %d", led_index, brightness);
 }
 
 int guest_uleds_run() {
@@ -172,7 +172,7 @@ int guest_uleds_run() {
   hdr.type = LED_MSG_HELLO;
   hdr.length = 0;
   if (write(pollfds[0].fd, &hdr, sizeof(hdr)) < 0) {
-    perror("write to host");
+    LOG_ERROR("write to host: %s", strerror(errno));
     return -1;
   }
 
@@ -181,7 +181,7 @@ int guest_uleds_run() {
   for (;;) {
     int ret = poll(pollfds, led_count + 1, -1);
     if (ret < 0) {
-      perror("poll");
+      LOG_ERROR("poll: %s", strerror(errno));
       return -1;
     }
 
@@ -190,19 +190,27 @@ int guest_uleds_run() {
       // handle incoming messages from the host here
       ssize_t bytes_read = read(pollfds[0].fd, &hdr, sizeof(hdr));
       if (bytes_read < 0) {
-        perror("read");
+        LOG_ERROR("read: %s", strerror(errno));
+        return -1;
+      }
+      if (bytes_read != (ssize_t)sizeof(hdr)) {
+        if (!bytes_read) {
+          LOG_DEBUG("Connection closed by host");
+          return 0;
+        }
+        LOG_ERROR("short read: %zd/%zu", bytes_read, sizeof(hdr));
         return -1;
       }
       if (hdr.type == LED_MSG_ADD_LED) {
         if (guest_uleds_handle_add_led(&hdr) < 0) {
-          perror("guest_uleds_handle_add_led");
+          LOG_ERROR("guest_uleds_handle_add_led failed");
           return -1;
         }
         pollfds[led_count].fd = leds[led_count - 1].fd;
         pollfds[led_count].events = POLLIN;
         pollfds[led_count].revents = 0;
       } else {
-        fprintf(stderr, "Unknown message type: %d\n", hdr.type);
+        LOG_ERROR("Unknown message type: %d", hdr.type);
       }
     }
     for (int i = 1; i < led_count + 1; i++) {
@@ -210,11 +218,11 @@ int guest_uleds_run() {
         // handle writable event for LED i here
         int brightness = read_brightness(pollfds[i].fd);
         if (brightness < 0) {
-          fprintf(stderr, "Failed to read brightness for LED %d (%s)\n", i,
-                  leds[i - 1].name);
+          LOG_ERROR("Failed to read brightness for LED %d (%s)", i,
+                    leds[i - 1].name);
         } else {
-          fprintf(stderr, "Successfully read brightness for LED %d (%s): %d\n",
-                  i, leds[i - 1].name, brightness);
+          LOG_DEBUG("Successfully read brightness for LED %d (%s): %d", i,
+                     leds[i - 1].name, brightness);
           set_brightness(i - 1, brightness);
         }
         pollfds[i].revents = 0;
@@ -256,7 +264,7 @@ int main(int argc, char *argv[]) {
   // open a vsock socket to the host
   int socket_fd = socket(AF_VSOCK, SOCK_STREAM, 0);
   if (socket_fd < 0) {
-    perror("socket");
+    LOG_ERROR("socket: %s", strerror(errno));
     return -1;
   }
 
@@ -267,7 +275,7 @@ int main(int argc, char *argv[]) {
   addr.svm_port = vsock_port;
 
   if (connect(socket_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-    perror("connect");
+    LOG_ERROR("connect: %s", strerror(errno));
     close(socket_fd);
     return -1;
   }

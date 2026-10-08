@@ -3,6 +3,7 @@
  SPDX-License-Identifier: Apache-2.0
  */
 
+#include <errno.h>
 #include <getopt.h>
 #include <linux/vm_sockets.h>
 #include <stdio.h>
@@ -11,6 +12,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "common/log.h"
 #include "common/protocol.h"
 #include "leds.h"
 
@@ -27,12 +29,12 @@ int get_max_brightness(const char *led_name) {
            led_name);
   FILE *f = fopen(path, "r");
   if (!f) {
-    perror("fopen");
+    LOG_ERROR("fopen: %s", strerror(errno));
     return 255;
   }
   int brightness;
   if (fscanf(f, "%d", &brightness) != 1) {
-    perror("fscanf");
+    LOG_ERROR("fscanf: %s", strerror(errno));
     fclose(f);
     return 255;
   }
@@ -43,18 +45,18 @@ int get_max_brightness(const char *led_name) {
 static int host_leds_send_list(const int socket_fd) {
   for (int i = 0; i < led_count; i++) {
     // Send each LED name over the socket here.
-    fprintf(stderr, "Sending LED name: %s\n", led_names[i]);
+    LOG_DEBUG("Sending LED name: %s", led_names[i]);
     struct led_msg_hdr hdr;
     hdr.version = LED_PROXY_VERSION;
     hdr.type = LED_MSG_ADD_LED;
     hdr.length = strlen(led_names[i]) + 1; // Include null terminator
     hdr.max_brightness = get_max_brightness(led_names[i]);
     if (write(socket_fd, &hdr, sizeof(hdr)) < 0) {
-      perror("write");
+      LOG_ERROR("write: %s", strerror(errno));
       return -1;
     }
     if (write(socket_fd, led_names[i], hdr.length) < 0) {
-      perror("write");
+      LOG_ERROR("write: %s", strerror(errno));
       return -1;
     }
   }
@@ -66,13 +68,13 @@ static int host_leds_set(const struct led_msg_hdr *hdr) {
       LED_SYS_CLASS_PATH; // Buffer to hold the message payload
   size_t prefix_len = strlen(LED_SYS_CLASS_PATH);
 
-  fprintf(stderr, "Handling LED_MSG_SET_BRIGHTNESS message\n");
+  LOG_DEBUG("Handling LED_MSG_SET_BRIGHTNESS message");
   if (hdr->led_index >= led_count) {
     extern int led_count;
     extern char **led_names;
 
     if (hdr->led_index >= led_count) {
-      fprintf(stderr, "Invalid LED index: %u\n", hdr->led_index);
+      LOG_ERROR("Invalid LED index: %u", hdr->led_index);
       return -1;
     }
   }
@@ -81,7 +83,7 @@ static int host_leds_set(const struct led_msg_hdr *hdr) {
 
   FILE *f = fopen(buf, "w");
   if (!f) {
-    perror("fopen");
+    LOG_ERROR("fopen: %s", strerror(errno));
     return -1;
   }
   fprintf(f, "%d\n", hdr->brightness);
@@ -96,7 +98,7 @@ static int host_leds_handle_client(int client_fd) {
     ssize_t bytes_read = read(client_fd, &hdr, sizeof(hdr));
     if (bytes_read <= 0) {
       if (bytes_read < 0) {
-        perror("read");
+        LOG_ERROR("read: %s", strerror(errno));
       }
       break;
     }
@@ -104,20 +106,20 @@ static int host_leds_handle_client(int client_fd) {
       // send list of all LED interfaces
       // check protocol version
       if (hdr.version != LED_PROXY_VERSION) {
-        fprintf(stderr, "Unsupported protocol version: %u\n", hdr.version);
+        LOG_ERROR("Unsupported protocol version: %u", hdr.version);
         break;
       }
       if (host_leds_send_list(client_fd) < 0) {
-        perror("host_leds_send_list");
+        LOG_ERROR("host_leds_send_list failed");
         break;
       }
       continue;
     }
     if (hdr.type == LED_MSG_SET_BRIGHTNESS) {
       // Handle LED_MSG_SET_BRIGHTNESS message here.
-      fprintf(stderr, "Received LED_MSG_SET_BRIGHTNESS message\n");
+      LOG_DEBUG("Received LED_MSG_SET_BRIGHTNESS message");
       if (host_leds_set(&hdr) < 0) {
-        perror("host_leds_set");
+        LOG_ERROR("host_leds_set failed");
         break;
       }
     }
@@ -130,7 +132,7 @@ static int host_leds_run(unsigned int vsock_port, unsigned int allowed_cid) {
 
   int listen_fd = socket(AF_VSOCK, SOCK_STREAM, 0);
   if (listen_fd < 0) {
-    perror("socket");
+    LOG_ERROR("socket: %s", strerror(errno));
     return -1;
   }
 
@@ -141,37 +143,36 @@ static int host_leds_run(unsigned int vsock_port, unsigned int allowed_cid) {
   addr.svm_port = vsock_port;
 
   if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-    perror("bind");
+    LOG_ERROR("bind: %s", strerror(errno));
     close(listen_fd);
     return -1;
   }
 
   if (listen(listen_fd, 1) < 0) {
-    perror("listen");
+    LOG_ERROR("listen: %s", strerror(errno));
     close(listen_fd);
     return -1;
   }
 
-  fprintf(stderr, "Listening for guest connections on vsock port %u\n",
-          vsock_port);
+  LOG_DEBUG("Listening for guest connections on vsock port %u", vsock_port);
 
   for (;;) {
     struct sockaddr_vm peer_addr;
     socklen_t peer_len = sizeof(peer_addr);
     int client_fd = accept(listen_fd, (struct sockaddr *)&peer_addr, &peer_len);
     if (client_fd < 0) {
-      perror("accept");
+      LOG_ERROR("accept: %s", strerror(errno));
       break;
     }
 
     if (allowed_cid != VMADDR_CID_ANY && peer_addr.svm_cid != allowed_cid) {
-      fprintf(stderr, "Rejecting connection from disallowed cid %u\n",
-              peer_addr.svm_cid);
+      LOG_ERROR("Rejecting connection from disallowed cid %u",
+                peer_addr.svm_cid);
       close(client_fd);
       continue;
     }
 
-    fprintf(stderr, "Accepted connection from cid %u\n", peer_addr.svm_cid);
+    LOG_DEBUG("Accepted connection from cid %u", peer_addr.svm_cid);
 
     host_leds_handle_client(client_fd);
 
@@ -232,24 +233,22 @@ int main(int argc, char *argv[]) {
 
   led_count = argc - optind;
   if (led_count <= 0) {
-    fprintf(stderr, "Error: at least one LED name must be specified.\n\n");
+    LOG_ERROR("at least one LED name must be specified");
     print_usage(argv[0]);
     return 1;
   }
 
   led_names = (char **)&argv[optind];
 
-  fprintf(stderr, "Starting host-led-proxy on vsock port %u with %d LED(s):\n",
-          vsock_port, led_count);
+  LOG_DEBUG("Starting host-led-proxy on vsock port %u with %d LED(s):",
+            vsock_port, led_count);
   for (int i = 0; i < led_count; i++) {
-    fprintf(stderr, "  - %s\n", led_names[i]);
+    LOG_DEBUG("  - %s", led_names[i]);
   }
 
   if (host_leds_check_exist() != 0) {
-    fprintf(stderr,
-            "Error: one or more LED interfaces do not exist under "
-            "%s\n",
-            LEDS_SYSFS_BASE);
+    LOG_ERROR("one or more LED interfaces do not exist under %s",
+              LEDS_SYSFS_BASE);
     return 1;
   }
 

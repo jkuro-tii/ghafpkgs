@@ -6,18 +6,17 @@ project(leds-proxy C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# Default to a Debug build when no build type is specified on the command
+# line (e.g. plain `cmake ..` without -DCMAKE_BUILD_TYPE=...).
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
+endif()
+
 # Different flags for different build types
 set(CMAKE_C_FLAGS_DEBUG "-g -O0 -DDEBUG -Wall -Wextra")
 set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG")
 set(CMAKE_C_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
 set(CMAKE_C_FLAGS_MINSIZEREL "-Os -DNDEBUG")
-
-    # find_package(PkgConfig REQUIRED)
-    # pkg_check_modules(GIO        REQUIRED IMPORTED_TARGET gio-2.0)
-    # pkg_check_modules(GLIB       REQUIRED IMPORTED_TARGET glib-2.0)
-    # pkg_check_modules(GTK4       REQUIRED IMPORTED_TARGET gtk4)
-    # pkg_check_modules(RSVG       REQUIRED IMPORTED_TARGET librsvg-2.0)
-    # pkg_check_modules(CAIRO      REQUIRED IMPORTED_TARGET cairo)
 
 add_executable(host-led-proxy
     common/protocol.c
@@ -42,14 +41,6 @@ target_include_directories(guest-led-proxy PRIVATE
 
 target_compile_options(host-led-proxy PRIVATE -Wall -Wextra)
 target_compile_options(guest-led-proxy PRIVATE -Wall -Wextra)
-
-# target_link_libraries(dbus-proxy PRIVATE
-#     PkgConfig::GIO
-#     PkgConfig::GLIB
-#     PkgConfig::GTK4
-#     PkgConfig::RSVG
-#     PkgConfig::CAIRO
-# )
 
 install(TARGETS host-led-proxy RUNTIME DESTINATION bin)
 install(TARGETS guest-led-proxy RUNTIME DESTINATION bin)
