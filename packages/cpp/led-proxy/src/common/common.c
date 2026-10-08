@@ -9,10 +9,13 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "common/log.h"
+
 volatile sig_atomic_t stop_requested = 0;
 
 void signal_handler(int signo) {
   (void)signo;
+  LOG_DEBUG("Signal received, stopping...");
   stop_requested = 1;
 }
 
