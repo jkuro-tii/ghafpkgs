@@ -111,6 +111,7 @@ static void *host_leds_handle_client(void *arg) {
       if (bytes_read < 0) {
         LOG_ERROR("read: %s", strerror(errno));
       }
+      LOG_DEBUG("Connection closed by client");
       goto exit;
     }
     // check protocol version
