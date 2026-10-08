@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <linux/vm_sockets.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -92,7 +93,8 @@ static int host_leds_set(const struct led_msg_hdr *hdr) {
   return 0;
 }
 
-static int host_leds_handle_client(int client_fd) {
+static void *host_leds_handle_client(void *arg) {
+  int client_fd = (int)(intptr_t)arg;
   for (;;) {
     struct led_msg_hdr hdr;
     ssize_t bytes_read = read(client_fd, &hdr, sizeof(hdr));
@@ -100,32 +102,44 @@ static int host_leds_handle_client(int client_fd) {
       if (bytes_read < 0) {
         LOG_ERROR("read: %s", strerror(errno));
       }
-      break;
+      goto exit;
     }
-    if (hdr.type == LED_MSG_HELLO) {
-      // send list of all LED interfaces
-      // check protocol version
-      if (hdr.version != LED_PROXY_VERSION) {
-        LOG_ERROR("Unsupported protocol version: %u", hdr.version);
-        break;
-      }
+    // check protocol version
+    if (hdr.version != LED_PROXY_VERSION) {
+      LOG_ERROR("Unsupported protocol version: %u", hdr.version);
+      goto exit;
+    }
+
+    switch (hdr.type) {
+    case LED_MSG_HELLO:
       if (host_leds_send_list(client_fd) < 0) {
         LOG_ERROR("host_leds_send_list failed");
-        break;
+        goto exit;
       }
-      continue;
-    }
-    if (hdr.type == LED_MSG_SET_BRIGHTNESS) {
+      break;
+
+    case LED_MSG_SET_BRIGHTNESS:
       // Handle LED_MSG_SET_BRIGHTNESS message here.
       LOG_DEBUG("Received LED_MSG_SET_BRIGHTNESS message");
       if (host_leds_set(&hdr) < 0) {
         LOG_ERROR("host_leds_set failed");
-        break;
+        goto exit;
       }
+      break;
+
+    case LED_MSG_EXIT:
+      LOG_DEBUG("Received LED_MSG_EXIT message");
+      goto exit;
+
+    default:
+      LOG_ERROR("Unknown message type: %u", hdr.type);
+      break;
     }
   }
 
-  return 0;
+exit:
+  close(client_fd);
+  return NULL;
 }
 
 static int host_leds_run(unsigned int vsock_port, unsigned int allowed_cid) {
@@ -148,7 +162,7 @@ static int host_leds_run(unsigned int vsock_port, unsigned int allowed_cid) {
     return -1;
   }
 
-  if (listen(listen_fd, 1) < 0) {
+  if (listen(listen_fd, SOMAXCONN) < 0) {
     LOG_ERROR("listen: %s", strerror(errno));
     close(listen_fd);
     return -1;
@@ -174,9 +188,14 @@ static int host_leds_run(unsigned int vsock_port, unsigned int allowed_cid) {
 
     LOG_DEBUG("Accepted connection from cid %u", peer_addr.svm_cid);
 
-    host_leds_handle_client(client_fd);
-
-    close(client_fd);
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, host_leds_handle_client,
+                       (void *)(intptr_t)client_fd) != 0) {
+      LOG_ERROR("pthread_create: %s", strerror(errno));
+      close(client_fd);
+      continue;
+    }
+    pthread_detach(thread);
   }
 
   close(listen_fd);

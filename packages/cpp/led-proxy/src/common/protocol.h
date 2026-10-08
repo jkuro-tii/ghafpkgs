@@ -18,8 +18,7 @@ enum led_msg_type {
   LED_MSG_HELLO = 1,
   LED_MSG_ADD_LED,
   LED_MSG_SET_BRIGHTNESS,
-  LED_MSG_UPDATE,
-  LED_MSG_ERROR,
+  LED_MSG_EXIT,
 };
 
 struct led_msg_hdr {
