@@ -282,6 +282,7 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
+  install_signal_handlers();
   int ret = host_leds_run(vsock_port, allowed_cid);
   return ret;
 }
