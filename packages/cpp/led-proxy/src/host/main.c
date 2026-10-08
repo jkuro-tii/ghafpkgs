@@ -120,7 +120,9 @@ static void *host_leds_handle_client(void *arg) {
 
     case LED_MSG_SET_BRIGHTNESS:
       // Handle LED_MSG_SET_BRIGHTNESS message here.
-      LOG_DEBUG("Received LED_MSG_SET_BRIGHTNESS message for LED index %u [%s] with brightness %d", hdr->led_index, led_names[hdr->led_index], hdr->brightness);
+      LOG_DEBUG("Received LED_MSG_SET_BRIGHTNESS message for LED index %u [%s] "
+                "with brightness %d",
+                hdr->led_index, led_names[hdr->led_index], hdr->brightness);
       if (host_leds_set(&hdr) < 0) {
         LOG_ERROR("host_leds_set failed");
         goto exit;
