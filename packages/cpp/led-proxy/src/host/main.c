@@ -104,6 +104,7 @@ static void *host_leds_handle_client(void *arg) {
       bytes_read = read(client_fd, &hdr, sizeof(hdr));
     } while (bytes_read < 0 && errno == EINTR && !stop_requested);
     if (stop_requested) {
+      LOG_DEBUG("Stop requested, exiting client handler");
       goto exit;
     }
     if (bytes_read <= 0) {
