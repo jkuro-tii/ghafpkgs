@@ -18,7 +18,6 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "common/common.h"
 #include "common/log.h"
 #include "common/protocol.h"
 
@@ -178,12 +177,6 @@ int guest_uleds_run() {
     int ret =
         poll(pollfds, led_count + 1, -1); // zero element is the host connection
 
-    if (stop_requested) {
-      cleanup();
-      LOG_DEBUG("Stop requested, exiting poll loop");
-      return -1;
-    }
-
     if (ret < 0) {
       LOG_ERROR("poll: %s", strerror(errno));
       return -1;
@@ -192,14 +185,7 @@ int guest_uleds_run() {
     // check for events from the host
     if (pollfds[0].revents & POLLIN) {
       // handle incoming messages from the host here
-      do {
-        bytes_read = read(pollfds[0].fd, &hdr, sizeof(hdr));
-      } while ((bytes_read < 0 && errno == EINTR && !stop_requested));
-      if (stop_requested) {
-        cleanup();
-        LOG_DEBUG("Stop requested, exiting read loop");
-        return -1;
-      }
+      bytes_read = read(pollfds[0].fd, &hdr, sizeof(hdr));
       if (bytes_read < 0) {
         LOG_ERROR("read: %s", strerror(errno));
         return -1;
@@ -272,7 +258,6 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  install_signal_handlers();
   // open a vsock socket to the host
   int socket_fd = socket(AF_VSOCK, SOCK_STREAM, 0);
   if (socket_fd < 0) {

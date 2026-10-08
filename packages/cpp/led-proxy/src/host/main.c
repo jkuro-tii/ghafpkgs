@@ -7,13 +7,13 @@
 #include <getopt.h>
 #include <linux/vm_sockets.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "common/common.h"
 #include "common/log.h"
 #include "common/protocol.h"
 #include "leds.h"
@@ -100,13 +100,8 @@ static void *host_leds_handle_client(void *arg) {
 
   int client_fd = (int)(intptr_t)arg;
   for (;;) {
-    do {
-      bytes_read = read(client_fd, &hdr, sizeof(hdr));
-    } while (bytes_read < 0 && errno == EINTR && !stop_requested);
-    if (stop_requested) {
-      LOG_DEBUG("Stop requested, exiting client handler");
-      goto exit;
-    }
+    bytes_read = read(client_fd, &hdr, sizeof(hdr));
+
     if (bytes_read <= 0) {
       if (bytes_read < 0) {
         LOG_ERROR("read: %s", strerror(errno));
@@ -186,11 +181,6 @@ static int host_leds_run(unsigned int vsock_port, unsigned int allowed_cid) {
     struct sockaddr_vm peer_addr;
     socklen_t peer_len = sizeof(peer_addr);
     int client_fd = accept(listen_fd, (struct sockaddr *)&peer_addr, &peer_len);
-    if (stop_requested) {
-      close(listen_fd);
-      LOG_DEBUG("Stop requested, exiting accept loop");
-      break;
-    }
     if (client_fd < 0) {
       LOG_ERROR("accept: %s", strerror(errno));
       break;
@@ -288,7 +278,6 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  install_signal_handlers();
   int ret = host_leds_run(vsock_port, allowed_cid);
   return ret;
 }
