@@ -13,6 +13,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "common/common.h"
 #include "common/log.h"
 #include "common/protocol.h"
 #include "leds.h"
@@ -94,10 +95,17 @@ static int host_leds_set(const struct led_msg_hdr *hdr) {
 }
 
 static void *host_leds_handle_client(void *arg) {
+  struct led_msg_hdr hdr;
+  ssize_t bytes_read;
+
   int client_fd = (int)(intptr_t)arg;
   for (;;) {
-    struct led_msg_hdr hdr;
-    ssize_t bytes_read = read(client_fd, &hdr, sizeof(hdr));
+    do {
+      bytes_read = read(client_fd, &hdr, sizeof(hdr));
+    } while (bytes_read < 0 && errno == EINTR && !stop_requested);
+    if (stop_requested) {
+      goto exit;
+    }
     if (bytes_read <= 0) {
       if (bytes_read < 0) {
         LOG_ERROR("read: %s", strerror(errno));

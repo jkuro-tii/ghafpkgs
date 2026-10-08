@@ -18,20 +18,18 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "common/common.h"
+#include "common/log.h"
+#include "common/protocol.h"
+
 #define MAX_LEDS (16)
 struct proxy_led {
   char *name;
   int max_brightness;
   int fd;
 } leds[MAX_LEDS];
-
-// jarekk: TODO: close everything on exit
-
 static int led_count = 0;
-struct pollfd pollfds[MAX_LEDS + 1];
-
-#include "common/log.h"
-#include "common/protocol.h"
+struct pollfd pollfds[MAX_LEDS + 1]; // zero element is fd to the host
 
 static void cleanup() {
   for (int i = 0; i < led_count; i++) {
@@ -164,6 +162,8 @@ void set_brightness(int led_index, int brightness) {
 int guest_uleds_run() {
   // send HELLO message to the host
   struct led_msg_hdr hdr;
+  ssize_t bytes_read;
+
   hdr.version = LED_PROXY_VERSION;
   hdr.type = LED_MSG_HELLO;
   hdr.length = 0;
@@ -177,6 +177,13 @@ int guest_uleds_run() {
   for (;;) {
     int ret =
         poll(pollfds, led_count + 1, -1); // zero element is the host connection
+
+    if (stop_requested) {
+      cleanup();
+      LOG_DEBUG("Stop requested, exiting poll loop");
+      return -1;
+    }
+
     if (ret < 0) {
       LOG_ERROR("poll: %s", strerror(errno));
       return -1;
@@ -185,7 +192,14 @@ int guest_uleds_run() {
     // check for events from the host
     if (pollfds[0].revents & POLLIN) {
       // handle incoming messages from the host here
-      ssize_t bytes_read = read(pollfds[0].fd, &hdr, sizeof(hdr));
+      do {
+        bytes_read = read(pollfds[0].fd, &hdr, sizeof(hdr));
+      } while ((bytes_read < 0 && errno == EINTR && !stop_requested));
+      if (stop_requested) {
+        cleanup();
+        LOG_DEBUG("Stop requested, exiting read loop");
+        return -1;
+      }
       if (bytes_read < 0) {
         LOG_ERROR("read: %s", strerror(errno));
         return -1;
@@ -258,6 +272,7 @@ int main(int argc, char *argv[]) {
     }
   }
 
+  install_signal_handlers();
   // open a vsock socket to the host
   int socket_fd = socket(AF_VSOCK, SOCK_STREAM, 0);
   if (socket_fd < 0) {
