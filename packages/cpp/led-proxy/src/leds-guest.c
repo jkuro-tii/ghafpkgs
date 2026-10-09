@@ -29,8 +29,45 @@ struct proxy_led {
 static int led_count = 0;
 struct pollfd pollfds[MAX_LEDS + 1]; // zero element is fd to the host
 
-static void cleanup() {
+// Read exactly len bytes from fd, retrying on EINTR and on short reads.
+// Returns len on success, 0 on orderly shutdown before any data was read,
+// or -1 on error/unexpected EOF.
+static ssize_t read_all(int fd, void *buf, size_t len) {
+  size_t total = 0;
+  while (total < len) {
+    ssize_t n = read(fd, (char *)buf + total, len - total);
+    if (n < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return -1;
+    }
+    if (n == 0) {
+      return total == 0 ? 0 : -1; // EOF, possibly mid-message
+    }
+    total += (size_t)n;
+  }
+  return (ssize_t)total;
+}
 
+// Write exactly len bytes to fd, retrying on EINTR and on short writes.
+// Returns len on success, -1 on error.
+static ssize_t write_all(int fd, const void *buf, size_t len) {
+  size_t total = 0;
+  while (total < len) {
+    ssize_t n = write(fd, (const char *)buf + total, len - total);
+    if (n < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return -1;
+    }
+    total += (size_t)n;
+  }
+  return (ssize_t)total;
+}
+
+static void cleanup(void) {
   for (int i = 0; i < led_count; i++) {
     if (leds[i].fd >= 0) {
       close(leds[i].fd);
@@ -47,9 +84,7 @@ static void cleanup() {
     pollfds[i].revents = 0;
   }
 }
-
 static int register_uled(struct proxy_led *led) {
-
   struct uleds_user_dev dev;
   ssize_t n;
   size_t name_len;
@@ -65,20 +100,9 @@ static int register_uled(struct proxy_led *led) {
     return -1;
   }
 
-  do {
-    n = write(led->fd, &dev, sizeof(dev));
-  } while (n < 0 && errno == EINTR);
-
+  n = write_all(led->fd, &dev, sizeof(dev));
   if (n < 0) {
     LOG_ERROR("%s: write registration: %s", led->name, strerror(errno));
-    close(led->fd);
-    led->fd = -1;
-    return -1;
-  }
-
-  if (n != (ssize_t)sizeof(dev)) {
-    LOG_ERROR("%s: short registration write: %zd/%zu", led->name, n,
-              sizeof(dev));
     close(led->fd);
     led->fd = -1;
     return -1;
@@ -89,14 +113,25 @@ static int register_uled(struct proxy_led *led) {
 
 static int guest_uleds_handle_add_led(const struct led_msg_hdr *hdr) {
 
-  // Receive and handle the add LED request from the host
+  // Receive and handle the add LED request from the host.
+  // hdr->length is attacker/peer-controlled, so it must be bounds-checked
+  // before it is used to size or index a buffer.
   size_t len = hdr->length;
-  char buf[len];
+  char buf[LED_NAME_LEN];
 
-  if (read(pollfds[0].fd, buf, len) < 0) {
+  if (len == 0 || len > sizeof(buf)) {
+    LOG_ERROR("Invalid LED name length: %zu (must be 1-%zu)", len,
+              sizeof(buf));
+    return -1;
+  }
+
+  if (read_all(pollfds[0].fd, buf, len) <= 0) {
     LOG_ERROR("read: %s", strerror(errno));
     return -1;
   }
+  // Ensure buf is always NUL-terminated, regardless of what the peer sent.
+  buf[len - 1] = '\0';
+
   LOG_DEBUG("Received LED name: %s max_brightness:%d", buf,
             hdr->max_brightness);
   if (led_count >= MAX_LEDS) {
@@ -105,10 +140,15 @@ static int guest_uleds_handle_add_led(const struct led_msg_hdr *hdr) {
   }
 
   leds[led_count].name = strdup(buf);
+  if (leds[led_count].name == NULL) {
+    LOG_ERROR("strdup: %s", strerror(errno));
+    return -1;
+  }
   if (strlen(leds[led_count].name) >= LED_MAX_NAME_SIZE) {
     LOG_ERROR("LED name is too long; maximum is %d characters",
               LED_MAX_NAME_SIZE - 1);
     free(leds[led_count].name);
+    leds[led_count].name = NULL;
     return -1;
   }
   leds[led_count].max_brightness = hdr->max_brightness;
@@ -119,6 +159,7 @@ static int guest_uleds_handle_add_led(const struct led_msg_hdr *hdr) {
   if (register_uled(&leds[led_count - 1]) < 0) {
     LOG_ERROR("Failed to register LED %s", leds[led_count - 1].name);
     free(leds[led_count - 1].name);
+    leds[led_count - 1].name = NULL;
     led_count--;
     return -1;
   }
@@ -126,13 +167,9 @@ static int guest_uleds_handle_add_led(const struct led_msg_hdr *hdr) {
   return 0;
 }
 
-int read_brightness(int fd) {
-  
+static int read_brightness(int fd) {
   int brightness;
-  ssize_t n;
-  do {
-    n = read(fd, &brightness, sizeof(brightness));
-  } while (n < 0 && errno == EINTR);
+  ssize_t n = read_all(fd, &brightness, sizeof(brightness));
 
   if (n < 0) {
     LOG_ERROR("read_brightness: %s", strerror(errno));
@@ -147,14 +184,14 @@ int read_brightness(int fd) {
   return brightness;
 }
 
-void set_brightness(int led_index, int brightness) {
+static void set_brightness(int led_index, int brightness) {
   // Send brightness update to the host
   struct led_msg_hdr hdr;
   hdr.version = LED_PROXY_VERSION;
   hdr.type = LED_MSG_SET_BRIGHTNESS;
   hdr.led_index = led_index;
   hdr.brightness = brightness;
-  if (write(pollfds[0].fd, &hdr, sizeof(hdr)) < 0) {
+  if (write_all(pollfds[0].fd, &hdr, sizeof(hdr)) < 0) {
     LOG_ERROR("write brightness to host: %s", strerror(errno));
     return;
   }
@@ -169,7 +206,7 @@ int guest_uleds_run() {
   hdr.version = LED_PROXY_VERSION;
   hdr.type = LED_MSG_HELLO;
   hdr.length = 0;
-  if (write(pollfds[0].fd, &hdr, sizeof(hdr)) < 0) {
+  if (write_all(pollfds[0].fd, &hdr, sizeof(hdr)) < 0) {
     LOG_ERROR("write to host: %s", strerror(errno));
     return -1;
   }
@@ -188,7 +225,7 @@ int guest_uleds_run() {
     // check for events from the host
     if (pollfds[0].revents & POLLIN) {
       // handle incoming messages from the host here
-      bytes_read = read(pollfds[0].fd, &hdr, sizeof(hdr));
+      bytes_read = read_all(pollfds[0].fd, &hdr, sizeof(hdr));
       if (bytes_read < 0) {
         LOG_ERROR("read: %s", strerror(errno));
         return -1;

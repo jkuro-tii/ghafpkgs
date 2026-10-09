@@ -19,13 +19,11 @@ set(CMAKE_C_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
 set(CMAKE_C_FLAGS_MINSIZEREL "-Os -DNDEBUG")
 
 add_executable(host-led-proxy
-    host/leds.c
-    host/main.c
+    leds-host.c
 )
 
 add_executable(guest-led-proxy
-    guest/uleds.c
-    guest/main.c
+    leds-guest.c
 )
 
 target_include_directories(host-led-proxy PRIVATE
