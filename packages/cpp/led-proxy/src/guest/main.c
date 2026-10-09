@@ -11,7 +11,6 @@
 #include <linux/uleds.h>
 #include <linux/vm_sockets.h>
 #include <poll.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +30,7 @@ static int led_count = 0;
 struct pollfd pollfds[MAX_LEDS + 1]; // zero element is fd to the host
 
 static void cleanup() {
+
   for (int i = 0; i < led_count; i++) {
     if (leds[i].fd >= 0) {
       close(leds[i].fd);
@@ -47,7 +47,9 @@ static void cleanup() {
     pollfds[i].revents = 0;
   }
 }
+
 static int register_uled(struct proxy_led *led) {
+
   struct uleds_user_dev dev;
   ssize_t n;
   size_t name_len;
@@ -125,6 +127,7 @@ static int guest_uleds_handle_add_led(const struct led_msg_hdr *hdr) {
 }
 
 int read_brightness(int fd) {
+
   int brightness;
   ssize_t n;
   do {

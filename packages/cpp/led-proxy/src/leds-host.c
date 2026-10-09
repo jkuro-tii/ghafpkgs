@@ -12,23 +12,53 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "common/log.h"
 #include "common/protocol.h"
-#include "leds.h"
 
-#define LED_SYS_CLASS_PATH "/sys/class/leds/"
+#define LEDS_SYSFS_BASE "/sys/class/leds/"
 
 int led_count = 0;
 char **led_names = NULL;
+
+int host_leds_check_exist(void) {
+
+  int all_ok = 1;
+
+  for (int i = 0; i < led_count; i++) {
+    char path[512];
+    int written =
+        snprintf(path, sizeof(path), "%s/%s", LEDS_SYSFS_BASE, led_names[i]);
+    if (written < 0 || (size_t)written >= sizeof(path)) {
+      LOG_ERROR("LED name too long: %s", led_names[i]);
+      all_ok = 0;
+      continue;
+    }
+
+    struct stat st;
+    if (stat(path, &st) != 0) {
+      LOG_ERROR("LED interface not found: %s", path);
+      all_ok = 0;
+      continue;
+    }
+
+    if (!S_ISDIR(st.st_mode)) {
+      LOG_ERROR("LED path is not a directory: %s", path);
+      all_ok = 0;
+      continue;
+    }
+  }
+
+  return all_ok ? 0 : 1;
+}
 
 int get_max_brightness(const char *led_name) {
 
   char path[256];
 
-  snprintf(path, sizeof(path), LED_SYS_CLASS_PATH "%s/max_brightness",
-           led_name);
+  snprintf(path, sizeof(path), LEDS_SYSFS_BASE "%s/max_brightness", led_name);
   FILE *f = fopen(path, "r");
   if (!f) {
     LOG_ERROR("fopen: %s", strerror(errno));
@@ -45,6 +75,7 @@ int get_max_brightness(const char *led_name) {
 }
 
 static int host_leds_send_list(const int socket_fd) {
+
   for (int i = 0; i < led_count; i++) {
     // Send each LED name over the socket here.
     LOG_DEBUG("Sending LED name: %s", led_names[i]);
@@ -66,9 +97,9 @@ static int host_leds_send_list(const int socket_fd) {
 }
 
 static int host_leds_set(const struct led_msg_hdr *hdr) {
-  static char buf[256] =
-      LED_SYS_CLASS_PATH; // Buffer to hold the message payload
-  size_t prefix_len = strlen(LED_SYS_CLASS_PATH);
+
+  static char buf[256] = LEDS_SYSFS_BASE; // Buffer to hold the message payload
+  size_t prefix_len = strlen(LEDS_SYSFS_BASE);
 
   LOG_DEBUG("Handling LED_MSG_SET_BRIGHTNESS message");
   if (hdr->led_index >= led_count) {
@@ -95,6 +126,7 @@ static int host_leds_set(const struct led_msg_hdr *hdr) {
 }
 
 static void *host_leds_handle_client(void *arg) {
+
   struct led_msg_hdr hdr;
   ssize_t bytes_read;
 
@@ -211,6 +243,7 @@ static int host_leds_run(unsigned int vsock_port, unsigned int allowed_cid) {
 }
 
 static void print_usage(const char *prog_name) {
+
   fprintf(stderr,
           "Usage: %s [--port PORT] [--cid CID] LED_NAME [LED_NAME ...]\n"
           "\n"
@@ -230,6 +263,7 @@ static void print_usage(const char *prog_name) {
 }
 
 int main(int argc, char *argv[]) {
+
   unsigned int vsock_port = LED_PROXY_VSOCK_PORT;
   unsigned int allowed_cid = VMADDR_CID_ANY;
 
