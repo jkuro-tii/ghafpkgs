@@ -127,7 +127,7 @@ static int guest_uleds_handle_add_led(const struct led_msg_hdr *hdr) {
 }
 
 int read_brightness(int fd) {
-  
+
   int brightness;
   ssize_t n;
   do {

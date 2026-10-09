@@ -12,8 +12,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <unistd.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "common/log.h"
 #include "common/protocol.h"
@@ -58,8 +58,7 @@ int get_max_brightness(const char *led_name) {
 
   char path[256];
 
-  snprintf(path, sizeof(path), LEDS_SYSFS_BASE "%s/max_brightness",
-           led_name);
+  snprintf(path, sizeof(path), LEDS_SYSFS_BASE "%s/max_brightness", led_name);
   FILE *f = fopen(path, "r");
   if (!f) {
     LOG_ERROR("fopen: %s", strerror(errno));
@@ -99,8 +98,7 @@ static int host_leds_send_list(const int socket_fd) {
 
 static int host_leds_set(const struct led_msg_hdr *hdr) {
 
-  static char buf[256] =
-      LEDS_SYSFS_BASE; // Buffer to hold the message payload
+  static char buf[256] = LEDS_SYSFS_BASE; // Buffer to hold the message payload
   size_t prefix_len = strlen(LEDS_SYSFS_BASE);
 
   LOG_DEBUG("Handling LED_MSG_SET_BRIGHTNESS message");

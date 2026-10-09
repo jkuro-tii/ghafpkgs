@@ -120,8 +120,7 @@ static int guest_uleds_handle_add_led(const struct led_msg_hdr *hdr) {
   char buf[LED_NAME_LEN];
 
   if (len == 0 || len > sizeof(buf)) {
-    LOG_ERROR("Invalid LED name length: %zu (must be 1-%zu)", len,
-              sizeof(buf));
+    LOG_ERROR("Invalid LED name length: %zu (must be 1-%zu)", len, sizeof(buf));
     return -1;
   }
 
