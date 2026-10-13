@@ -19,44 +19,45 @@
 #include "common/protocol.h"
 
 #define LEDS_SYSFS_BASE "/sys/class/leds/"
+#define PATH_MAX 512
 
-int led_count = 0;
-char **led_names = NULL;
+static int led_count = 0;
+static char *led_names[MAX_LEDS];
 
-int host_leds_check_exist(void) {
+static int host_leds_check_exist(char **arg_led_names) {
 
-  int all_ok = 1;
+  int count = 0;
 
   for (int i = 0; i < led_count; i++) {
-    char path[512];
+    char path[PATH_MAX];
     int written =
-        snprintf(path, sizeof(path), "%s/%s", LEDS_SYSFS_BASE, led_names[i]);
+        snprintf(path, sizeof(path), "%s/%s", LEDS_SYSFS_BASE, arg_led_names[i]);
     if (written < 0 || (size_t)written >= sizeof(path)) {
-      LOG_ERROR("LED name too long: %s", led_names[i]);
-      all_ok = 0;
+      LOG_ERROR("LED name too long: %s", arg_led_names[i]);
       continue;
     }
 
     struct stat st;
     if (stat(path, &st) != 0) {
       LOG_ERROR("LED interface not found: %s", path);
-      all_ok = 0;
       continue;
     }
 
     if (!S_ISDIR(st.st_mode)) {
       LOG_ERROR("LED path is not a directory: %s", path);
-      all_ok = 0;
       continue;
     }
+    led_names[count] = arg_led_names[i];
+    count++;
   }
 
-  return all_ok ? 0 : 1;
+  led_count = count;
+  return count;
 }
 
 int get_max_brightness(const char *led_name) {
 
-  char path[256];
+  char path[PATH_MAX];
 
   snprintf(path, sizeof(path), LEDS_SYSFS_BASE "%s/max_brightness", led_name);
   FILE *f = fopen(path, "r");
@@ -98,18 +99,13 @@ static int host_leds_send_list(const int socket_fd) {
 
 static int host_leds_set(const struct led_msg_hdr *hdr) {
 
-  static char buf[256] = LEDS_SYSFS_BASE; // Buffer to hold the message payload
+  static char buf[PATH_MAX] = LEDS_SYSFS_BASE; // Buffer to hold the message payload
   size_t prefix_len = strlen(LEDS_SYSFS_BASE);
 
   LOG_DEBUG("Handling LED_MSG_SET_BRIGHTNESS message");
   if (hdr->led_index >= led_count) {
-    extern int led_count;
-    extern char **led_names;
-
-    if (hdr->led_index >= led_count) {
-      LOG_ERROR("Invalid LED index: %u", hdr->led_index);
-      return -1;
-    }
+    LOG_ERROR("Invalid LED index: %u", hdr->led_index);
+    return -1;
   }
 
   sprintf(buf + prefix_len, "%s/brightness", led_names[hdr->led_index]);
@@ -291,6 +287,7 @@ int main(int argc, char *argv[]) {
     }
   }
 
+  memset(led_names, 0, sizeof(led_names));
   led_count = argc - optind;
   if (led_count <= 0) {
     LOG_ERROR("at least one LED name must be specified");
@@ -298,7 +295,10 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  led_names = (char **)&argv[optind];
+  if (host_leds_check_exist(&argv[optind]) == 0) {
+    LOG_ERROR("No LED interfaces exist under %s, exiting", LEDS_SYSFS_BASE);
+    return 0;
+  }
 
   LOG_DEBUG("Starting host-led-proxy on vsock port %u with %d LED(s):",
             vsock_port, led_count);
@@ -306,11 +306,6 @@ int main(int argc, char *argv[]) {
     LOG_DEBUG("  - %s", led_names[i]);
   }
 
-  if (host_leds_check_exist() != 0) {
-    LOG_ERROR("one or more LED interfaces do not exist under %s",
-              LEDS_SYSFS_BASE);
-    return 1;
-  }
 
   int ret = host_leds_run(vsock_port, allowed_cid);
   return ret;

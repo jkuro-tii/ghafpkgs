@@ -8,7 +8,8 @@
 #include <stdint.h>
 
 #define LED_PROXY_VERSION 1
-#define LED_NAME_LEN 64
+#define LED_NAME_LEN (64)
+#define MAX_LEDS (16)
 
 /* Default vsock port the host-led-proxy listens on and the
  * guest-led-proxy connects to. */
