@@ -5,6 +5,8 @@
 
 #include <errno.h>
 #include <getopt.h>
+#include <glob.h>
+#include <limits.h>
 #include <linux/vm_sockets.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -19,21 +21,84 @@
 #include "common/protocol.h"
 
 #define LEDS_SYSFS_BASE "/sys/class/leds/"
-#define PATH_MAX 512
 
 static int led_count = 0;
 static char *led_names[MAX_LEDS];
 
-static int host_leds_check_exist(char **arg_led_names) {
+static int resolve_led_pattern(const char *pattern) {
+  char path[PATH_MAX];
+  glob_t result = {0};
 
-  int count = 0;
+  if (pattern == NULL || pattern[0] == '\0') {
+    LOG_ERROR("invalid empty LED pattern");
+    return -1;
+  }
+  int len = snprintf(path, sizeof(path), LEDS_SYSFS_BASE "/%s", pattern);
+  if (len < 0 || (size_t)len >= sizeof(path)) {
+    LOG_ERROR("LED pattern is too long: '%s'", pattern);
+    return -1;
+  }
 
-  for (int i = 0; i < led_count; i++) {
+  int ret = glob(path, GLOB_ERR, NULL, &result);
+
+  if (ret == GLOB_NOMATCH) {
+    LOG_ERROR("no LED matches pattern '%s'", pattern);
+    return -1;
+  }
+
+  if (ret != 0) {
+    LOG_ERROR("glob failed for LED pattern '%s': %d", pattern, ret);
+    globfree(&result);
+    return -1;
+  }
+
+  for (size_t i = 0; i < result.gl_pathc; i++) {
+    const char *full_path = result.gl_pathv[i];
+    const char *name = strrchr(full_path, '/');
+    if (name == NULL || name[1] == '\0')
+      continue;
+
+    if (led_count >= MAX_LEDS) {
+      LOG_ERROR("maximum number of LEDs reached");
+      break;
+    }
+    name++;
+    LOG_DEBUG("LED '%s' matched '%s'", pattern, name);
+
+    // add led name if already not exists
+    int exists = 0;
+    for (int j = 0; j < led_count; j++) {
+      if (strcmp(led_names[j], name) == 0) {
+        exists = 1;
+        break;
+      }
+    }
+    if (!exists) {
+      led_names[led_count] = strdup(name);
+      if (!led_names[led_count]) {
+        LOG_ERROR("failed to allocate memory for LED name '%s'", name);
+        continue;
+      }
+      led_count++;
+    }
+  }
+
+  globfree(&result);
+  return 0;
+}
+
+static int host_leds_check_exist(char **arg_led_names, int arg_led_count) {
+
+  for (int i = 0; i < arg_led_count; i++) {
     char path[PATH_MAX];
+
+    if (resolve_led_pattern(arg_led_names[i])) {
+      continue;
+    }
     int written =
-        snprintf(path, sizeof(path), "%s/%s", LEDS_SYSFS_BASE, arg_led_names[i]);
+        snprintf(path, sizeof(path), "%s/%s", LEDS_SYSFS_BASE, led_names[i]);
     if (written < 0 || (size_t)written >= sizeof(path)) {
-      LOG_ERROR("LED name too long: %s", arg_led_names[i]);
+      LOG_ERROR("LED name too long: %s", led_names[i]);
       continue;
     }
 
@@ -47,12 +112,8 @@ static int host_leds_check_exist(char **arg_led_names) {
       LOG_ERROR("LED path is not a directory: %s", path);
       continue;
     }
-    led_names[count] = arg_led_names[i];
-    count++;
   }
-
-  led_count = count;
-  return count;
+  return led_count;
 }
 
 int get_max_brightness(const char *led_name) {
@@ -99,7 +160,8 @@ static int host_leds_send_list(const int socket_fd) {
 
 static int host_leds_set(const struct led_msg_hdr *hdr) {
 
-  static char buf[PATH_MAX] = LEDS_SYSFS_BASE; // Buffer to hold the message payload
+  static char buf[PATH_MAX] =
+      LEDS_SYSFS_BASE; // Buffer to hold the message payload
   size_t prefix_len = strlen(LEDS_SYSFS_BASE);
 
   LOG_DEBUG("Handling LED_MSG_SET_BRIGHTNESS message");
@@ -288,24 +350,25 @@ int main(int argc, char *argv[]) {
   }
 
   memset(led_names, 0, sizeof(led_names));
-  led_count = argc - optind;
-  if (led_count <= 0) {
+  led_count = 0;
+  int arg_led_count = argc - optind;
+  if (arg_led_count <= 0) {
     LOG_ERROR("at least one LED name must be specified");
     print_usage(argv[0]);
     return 1;
   }
 
-  if (host_leds_check_exist(&argv[optind]) == 0) {
+  if (host_leds_check_exist(&argv[optind], arg_led_count) == 0) {
     LOG_ERROR("No LED interfaces exist under %s, exiting", LEDS_SYSFS_BASE);
     return 0;
   }
 
-  LOG_DEBUG("Starting host-led-proxy on vsock port %u with %d LED(s):",
-            vsock_port, led_count);
-  for (int i = 0; i < led_count; i++) {
-    LOG_DEBUG("  - %s", led_names[i]);
-  }
+  fprintf(stderr, "Starting host-led-proxy on vsock port %u with %d LED(s):",
+          vsock_port, led_count);
+  for (int i = 0; i < led_count; i++)
+    fprintf(stderr, " %s", led_names[i]);
 
+  fprintf(stderr, "\n");
 
   int ret = host_leds_run(vsock_port, allowed_cid);
   return ret;

@@ -31,7 +31,6 @@ stdenv.mkDerivation {
     util-linux
   ];
 
-
   meta = {
     description = "LED proxy for Ghaf framework";
     homepage = "https://github.com/tiiuae/ghafpkgs";

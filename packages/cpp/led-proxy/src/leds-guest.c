@@ -310,7 +310,8 @@ int main(int argc, char *argv[]) {
   addr.svm_port = vsock_port;
 
   if (connect(socket_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-    LOG_ERROR("Unable to connect to host CID %u port %u: %s. Exiting.", host_cid, vsock_port, strerror(errno));
+    LOG_ERROR("Unable to connect to host CID %u port %u: %s. Exiting.",
+              host_cid, vsock_port, strerror(errno));
     close(socket_fd);
     return 0;
   }
