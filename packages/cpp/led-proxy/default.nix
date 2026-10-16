@@ -2,18 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 {
   stdenv,
+  alsa-utils,
   cmake,
-  pkg-config,
+  coreutils,
   glib,
-  # gtk4,
+  gnused,
+  makeWrapper,
+  pkg-config,
   util-linux,
-  # librsvg,
-  # cairo,
-  # cppcheck,
-  # valgrind,
-  # dbus,
-  # python3,
-  # gobject-introspection,
   lib,
 }:
 stdenv.mkDerivation {
@@ -25,11 +21,27 @@ stdenv.mkDerivation {
   nativeBuildInputs = [
     cmake
     pkg-config
+    makeWrapper
   ];
   buildInputs = [
     glib
     util-linux
   ];
+
+  postInstall = ''
+    # use the above src variable
+      install -Dm755 $src/setup-audio-led \
+        $out/bin/setup-audio-led
+
+      wrapProgram $out/bin/setup-audio-led \
+        --prefix PATH : ${
+          lib.makeBinPath [
+            alsa-utils
+            gnused
+            coreutils
+          ]
+        }
+  '';
 
   meta = {
     description = "LED proxy for Ghaf framework";

@@ -23,9 +23,14 @@
 struct proxy_led {
   char *name;
   int max_brightness;
+  int index;
   int fd;
 } leds[MAX_LEDS];
 static int led_count = 0;
+static int incoming_led_count = 0;
+static int allowed_led_count = 0;
+static char *allowed_led_names[MAX_LEDS];
+
 struct pollfd pollfds[MAX_LEDS + 1]; // zero element is fd to the host
 
 // Read exactly len bytes from fd, retrying on EINTR and on short reads.
@@ -137,6 +142,22 @@ static int guest_uleds_handle_add_led(const struct led_msg_hdr *hdr) {
     return -1;
   }
 
+  int found = 0;
+  for (int i = 0; i < allowed_led_count; i++) {
+
+    // Check if the LED name ends with one of the allowed LED names.
+    if (strcmp(buf + strlen(buf) - strlen(allowed_led_names[i]),
+               allowed_led_names[i]) == 0) {
+      found = 1;
+      break;
+    }
+  }
+  if (!found) {
+    LOG_DEBUG("LED name ignored: %s", buf);
+    incoming_led_count++;
+    return 1;
+  }
+
   leds[led_count].name = strdup(buf);
   if (leds[led_count].name == NULL) {
     LOG_ERROR("strdup: %s", strerror(errno));
@@ -149,8 +170,10 @@ static int guest_uleds_handle_add_led(const struct led_msg_hdr *hdr) {
     leds[led_count].name = NULL;
     return -1;
   }
+  leds[led_count].index = incoming_led_count;
   leds[led_count].max_brightness = hdr->max_brightness;
   leds[led_count].fd = -1; // Not yet opened
+  incoming_led_count++;
   led_count++;
 
   // Add LED to /dev/uleds here.
@@ -187,7 +210,7 @@ static void set_brightness(int led_index, int brightness) {
   struct led_msg_hdr hdr;
   hdr.version = LED_PROXY_VERSION;
   hdr.type = LED_MSG_SET_BRIGHTNESS;
-  hdr.led_index = led_index;
+  hdr.led_index = leds[led_index].index;
   hdr.brightness = brightness;
   if (write_all(pollfds[0].fd, &hdr, sizeof(hdr)) < 0) {
     LOG_ERROR("write brightness to host: %s", strerror(errno));
@@ -237,13 +260,16 @@ int guest_uleds_run() {
         return -1;
       }
       if (hdr.type == LED_MSG_ADD_LED) {
-        if (guest_uleds_handle_add_led(&hdr) < 0) {
+        int ret = guest_uleds_handle_add_led(&hdr);
+        if (ret < 0) {
           LOG_ERROR("guest_uleds_handle_add_led failed");
           return -1;
         }
-        pollfds[led_count].fd = leds[led_count - 1].fd;
-        pollfds[led_count].events = POLLIN;
-        pollfds[led_count].revents = 0;
+        if (ret == 0) {
+          pollfds[led_count].fd = leds[led_count - 1].fd;
+          pollfds[led_count].events = POLLIN;
+          pollfds[led_count].revents = 0;
+        }
       } else {
         LOG_ERROR("Unknown message type: %d", hdr.type);
       }
@@ -294,6 +320,19 @@ int main(int argc, char *argv[]) {
       fprintf(stderr, "Usage: %s [--cid CID] [--port PORT]\n", argv[0]);
       return 1;
     }
+  }
+
+  allowed_led_count = argc - optind;
+  if (allowed_led_count >= MAX_LEDS) {
+    LOG_ERROR("Too many LEDs specified (max %d)", MAX_LEDS);
+    return -1;
+  }
+  if (!allowed_led_count) {
+    LOG_ERROR("No LEDs specified");
+    return -1;
+  }
+  for (int i = 0; i < allowed_led_count; i++) {
+    allowed_led_names[i] = argv[optind + i];
   }
 
   // open a vsock socket to the host

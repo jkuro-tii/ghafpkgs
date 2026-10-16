@@ -8,9 +8,9 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # Default to a Debug build when no build type is specified on the command
 # line (e.g. plain `cmake ..` without -DCMAKE_BUILD_TYPE=...).
-if(NOT CMAKE_BUILD_TYPE)
+# if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
-endif()
+# endif()
 
 # Different flags for different build types
 set(CMAKE_C_FLAGS_DEBUG "-g -O0 -DDEBUG -Wall -Wextra")
@@ -18,23 +18,23 @@ set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG")
 set(CMAKE_C_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
 set(CMAKE_C_FLAGS_MINSIZEREL "-Os -DNDEBUG")
 
-add_executable(host-led-proxy
-    leds-host.c
+add_executable(led-proxy-server
+    led-proxy-server.c
 )
 
-add_executable(guest-led-proxy
-    leds-guest.c
+add_executable(led-proxy-client
+    led-proxy-client.c
 )
 
-target_include_directories(host-led-proxy PRIVATE
+target_include_directories(led-proxy-server PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
-target_include_directories(guest-led-proxy PRIVATE
+target_include_directories(led-proxy-client PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_compile_options(host-led-proxy PRIVATE -Wall -Wextra)
-target_compile_options(guest-led-proxy PRIVATE -Wall -Wextra)
+target_compile_options(led-proxy-server PRIVATE -Wall -Wextra)
+target_compile_options(led-proxy-client PRIVATE -Wall -Wextra)
 
-install(TARGETS host-led-proxy RUNTIME DESTINATION bin)
-install(TARGETS guest-led-proxy RUNTIME DESTINATION bin)
+install(TARGETS led-proxy-server RUNTIME DESTINATION bin)
+install(TARGETS led-proxy-client RUNTIME DESTINATION bin)
