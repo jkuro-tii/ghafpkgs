@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <systemd/sd-bus.h>
 #include <unistd.h>
 
 #include "common/common.h"
@@ -28,6 +29,7 @@ struct proxy_led {
   int max_brightness;
   int index;
   int fd;
+  int brightness;
 } leds[MAX_LEDS];
 static int led_count = 0;
 static int incoming_led_count = 0;
@@ -146,7 +148,8 @@ static int guest_uleds_handle_add_led(const struct led_msg_hdr *hdr) {
   }
   leds[led_count].index = incoming_led_count;
   leds[led_count].max_brightness = hdr->max_brightness;
-  leds[led_count].fd = -1; // Not yet opened
+  leds[led_count].brightness = -1; // Initialize brightness to -1
+  leds[led_count].fd = -1;         // Not yet opened
   incoming_led_count++;
   led_count++;
 
@@ -180,6 +183,10 @@ static int read_brightness(int fd) {
 }
 
 static void set_brightness(int led_index, int brightness) {
+  LOG_DEBUG("Setting brightness for LED %d to %d", led_index, brightness);
+  if (leds[led_index].brightness == brightness) {
+    return;
+  }
   // Send brightness update to the host
   struct led_msg_hdr hdr;
   hdr.version = LED_PROXY_VERSION;
@@ -193,6 +200,46 @@ static void set_brightness(int led_index, int brightness) {
   LOG_DEBUG("Sent brightness update for LED %d: %d", led_index, brightness);
 }
 
+// Handle notification from the host that keyboard brightness has changed
+// Keyboard combination Fn+space adjusts the keyboard backlight brightness
+// directly on the host. This function updates the local LED state and notifies
+// upowerd if the keyboard backlight changes.
+static int guest_uleds_handle_brightness_changed(struct led_msg_hdr *hdr) {
+  if (hdr->led_index >= led_count) {
+    LOG_ERROR("Invalid LED index: %u", hdr->led_index);
+    return -1;
+  }
+  int led_index = hdr->led_index;
+  int brightness = hdr->brightness;
+  LOG_DEBUG("Received brightness change for LED %d: %d", led_index, brightness);
+
+  // Execute dbus call to notify upowerd that keyboard brightness has changed
+  // check if the LED is the keyboard backlight
+  leds[led_index].brightness = brightness;
+  if (strstr(leds[led_index].name, "kbd_backlight") != NULL) {
+    sd_bus *bus = NULL;
+    int r = sd_bus_default_system(&bus);
+    if (r < 0) {
+      LOG_ERROR("Failed to connect to system bus: %s", strerror(-r));
+      return -1;
+    }
+    r = sd_bus_call_method(bus, "org.freedesktop.UPower",
+                           "/org/freedesktop/UPower/KbdBacklight",
+                           "org.freedesktop.UPower.KbdBacklight",
+                           "SetBrightness", NULL, NULL, "u", brightness);
+    if (r < 0) {
+      LOG_ERROR("Failed to call SetBrightness: %s", strerror(-r));
+      sd_bus_unref(bus);
+      return -1;
+    }
+    sd_bus_unref(bus);
+  } else {
+    LOG_DEBUG("Brightness change for non-keyboard LED: %s",
+              leds[led_index].name);
+  }
+
+  return 0;
+}
 int guest_uleds_run() {
   // send HELLO message to the host
   struct led_msg_hdr hdr;
@@ -243,6 +290,12 @@ int guest_uleds_run() {
           pollfds[led_count].fd = leds[led_count - 1].fd;
           pollfds[led_count].events = POLLIN;
           pollfds[led_count].revents = 0;
+        }
+      } else if (hdr.type == LED_MSG_BRIGHTNESS_CHANGED) {
+        ret = guest_uleds_handle_brightness_changed(&hdr);
+        if (ret < 0) {
+          LOG_ERROR("guest_uleds_handle_brightness_changed failed");
+          return -1;
         }
       } else {
         LOG_ERROR("Unknown message type: %d", hdr.type);

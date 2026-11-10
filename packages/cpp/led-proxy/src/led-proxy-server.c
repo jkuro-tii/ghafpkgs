@@ -4,10 +4,12 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <glob.h>
 #include <limits.h>
 #include <linux/vm_sockets.h>
+#include <poll.h>
 #include <pthread.h>
 #include <semaphore.h>
 #include <stdint.h>
@@ -99,11 +101,13 @@ static int resolve_led_pattern(const char *pattern, enum led_role role) {
     }
     int allowed = exists && (role == LED_ROLE_NORMAL) &&
                   (leds[j].role == LED_ROLE_MONITORED);
-    if (!exists || allowed) {
+    if (!exists) {
       strncpy(leds[led_count].name, name, LED_NAME_LEN_MAX - 1);
       leds[led_count].name[LED_NAME_LEN_MAX - 1] = '\0';
-      leds[led_count].role = exists ? LED_ROLE_MONITORED : leds[j].role;
+      leds[led_count].role = role;
       led_count++;
+    } else if (allowed) {
+      leds[j].role = LED_ROLE_MONITORED;
     }
   }
 
@@ -126,11 +130,11 @@ static int host_leds_check_exist(char **arg_led_names, int arg_led_count,
   return led_count;
 }
 
-uint16_t get_max_brightness(const char *led_name) {
+uint16_t get_brightness(const char *led_name, const char *type) {
 
   char path[PATH_MAX];
 
-  snprintf(path, sizeof(path), LEDS_SYSFS_BASE "%s/max_brightness", led_name);
+  snprintf(path, sizeof(path), LEDS_SYSFS_BASE "%s/%s", led_name, type);
   FILE *f = fopen(path, "r");
   if (!f) {
     LOG_ERROR("fopen: %s", strerror(errno));
@@ -160,7 +164,8 @@ static int host_leds_send_list(const int socket_fd) {
     hdr.version = LED_PROXY_VERSION;
     hdr.type = LED_MSG_ADD_LED;
     hdr.length = strlen(leds[i].name) + 1; // Include null terminator
-    hdr.max_brightness = MIN(get_max_brightness(leds[i].name), 255);
+    hdr.max_brightness =
+        MIN(get_brightness(leds[i].name, "max_brightness"), 255);
     if (write_all(socket_fd, &hdr, sizeof(hdr)) < 0) {
       LOG_ERROR("write: %s", strerror(errno));
       return -1;
@@ -199,59 +204,133 @@ static void *host_leds_handle_client(const void *arg) {
 
   struct led_msg_hdr hdr;
   ssize_t bytes_read;
+  struct pollfd
+      pollfds[MAX_LEDS + 1]; // +1 for the client socket fd, at index 0
+  int fds = 1;               // Start with 1 for the client socket fd at index 0
+  int monitored_leds[MAX_LEDS];
+
+  memset(pollfds, 0, sizeof(pollfds));
+
+  // Loop over monitored LEDs and open /sys path to brightness_hw_changed
+  for (int i = 0; i < led_count; i++) {
+    if (leds[i].role != LED_ROLE_MONITORED) {
+      continue;
+    }
+
+    char buf[PATH_MAX];
+    snprintf(buf, sizeof(buf), "%s%s/brightness_hw_changed", LEDS_SYSFS_BASE,
+             leds[i].name);
+    int fd = open(buf, O_RDONLY);
+    if (fd < 0) {
+      LOG_ERROR("open: %s", strerror(errno));
+      return NULL;
+    }
+    pollfds[fds].fd = fd;
+    pollfds[fds].events = POLLPRI;
+    pollfds[fds].revents = 0;
+    monitored_leds[fds - 1] = i; // store the monitored LED index
+    // execute a dummy read to clear any existing event
+    lseek(fd, 0, SEEK_SET);
+    char dummy[32];
+    read(fd, dummy, sizeof(dummy));
+    fds++;
+  }
 
   int client_fd = ((struct client_data *)arg)->fd;
+  pollfds[0].fd = client_fd;
+  pollfds[0].events = POLLIN;
+  pollfds[0].revents = 0;
   for (;;) {
-    bytes_read = read_all(client_fd, &hdr, sizeof(hdr));
-
-    if (bytes_read <= 0) {
-      if (bytes_read < 0) {
-        LOG_ERROR("read: %s", strerror(errno));
-      }
-      LOG_DEBUG("Connection closed by client");
-      goto exit;
-    }
-    // check protocol version
-    if (hdr.version != LED_PROXY_VERSION) {
-      LOG_ERROR("Unsupported protocol version: %u", hdr.version);
-      goto exit;
+    int ret = poll(pollfds, fds, -1);
+    if (ret < 0) {
+      LOG_ERROR("poll: %s", strerror(errno));
+      return NULL;
     }
 
-    switch (hdr.type) {
-    case LED_MSG_HELLO:
-      if (host_leds_send_list(client_fd) < 0) {
-        LOG_ERROR("host_leds_send_list failed");
+    // Check if the client socket has data to read
+    if (pollfds[0].revents & POLLIN) {
+      bytes_read = read_all(client_fd, &hdr, sizeof(hdr));
+
+      if (bytes_read <= 0) {
+        if (bytes_read < 0) {
+          LOG_ERROR("read: %s", strerror(errno));
+        }
+        LOG_DEBUG("Connection closed by client");
         goto exit;
       }
-      break;
+      // check protocol version
+      if (hdr.version != LED_PROXY_VERSION) {
+        LOG_ERROR("Unsupported protocol version: %u", hdr.version);
+        goto exit;
+      }
 
-    case LED_MSG_SET_BRIGHTNESS:
-      // Handle LED_MSG_SET_BRIGHTNESS message here.
-      if (hdr.led_index >= led_count) {
-        LOG_ERROR("Invalid LED index: %u", hdr.led_index);
+      switch (hdr.type) {
+      case LED_MSG_HELLO:
+        if (host_leds_send_list(client_fd) < 0) {
+          LOG_ERROR("host_leds_send_list failed");
+          goto exit;
+        }
+        break;
+
+      case LED_MSG_SET_BRIGHTNESS:
+        // Handle LED_MSG_SET_BRIGHTNESS message here.
+        if (hdr.led_index >= led_count) {
+          LOG_ERROR("Invalid LED index: %u", hdr.led_index);
+          break;
+        }
+        LOG_DEBUG(
+            "Received LED_MSG_SET_BRIGHTNESS message for LED index %u [%s] "
+            "with brightness %d",
+            hdr.led_index, leds[hdr.led_index].name, hdr.brightness);
+        if (host_leds_set(&hdr) < 0) {
+          LOG_ERROR("host_leds_set failed");
+          goto exit;
+        }
+        break;
+
+      case LED_MSG_EXIT:
+        LOG_DEBUG("Received LED_MSG_EXIT message");
+        goto exit;
+
+      default:
+        LOG_ERROR("Unknown message type: %u", hdr.type);
         break;
       }
-      LOG_DEBUG("Received LED_MSG_SET_BRIGHTNESS message for LED index %u [%s] "
-                "with brightness %d",
-                hdr.led_index, leds[hdr.led_index].name, hdr.brightness);
-      if (host_leds_set(&hdr) < 0) {
-        LOG_ERROR("host_leds_set failed");
-        goto exit;
+    }
+    // Check if any of the LED fds have events
+    for (int i = 1; i < fds;
+         i++) { // i starts from 1 as the zero element is clients fd
+      if (pollfds[i].revents & POLLPRI) {
+        // execute a dummy read to clear the event
+        lseek(pollfds[i].fd, 0, SEEK_SET);
+        char dummy[32];
+        read(pollfds[i].fd, &dummy, sizeof(dummy));
+        int led_index = monitored_leds[i - 1];
+        u_int16_t brightness =
+            get_brightness(leds[led_index].name, "brightness");
+        LOG_DEBUG("LED event for monitored LED: %s brightness %u",
+                  leds[led_index].name, brightness);
+        if (brightness == UINT16_MAX) {
+          LOG_ERROR("Failed to get brightness for LED: %s",
+                    leds[led_index].name);
+          continue;
+        }
+        hdr.type = LED_MSG_BRIGHTNESS_CHANGED;
+        hdr.led_index = led_index;
+        hdr.brightness = brightness;
+        if (write_all(client_fd, &hdr, sizeof(hdr)) < 0) {
+          LOG_ERROR("write failed");
+          continue;
+        }
       }
-      break;
-
-    case LED_MSG_EXIT:
-      LOG_DEBUG("Received LED_MSG_EXIT message");
-      goto exit;
-
-    default:
-      LOG_ERROR("Unknown message type: %u", hdr.type);
-      break;
     }
   }
 
 exit:
-  close(client_fd);
+  // close all fds associated with this client and leds
+  for (int i = 0; i < fds; i++) {
+    close(pollfds[i].fd);
+  }
   sem_wait(&connections_sem);
   if (((struct client_data *)arg)->client_index != -1) {
     client_cid[((struct client_data *)arg)->client_index] = 0;
@@ -410,6 +489,8 @@ int main(int argc, char *argv[]) {
   int opt;
   char *tmp_str = NULL;
   memset(leds, 0, sizeof(leds));
+  led_count = 0;
+
   while ((opt = getopt_long(argc, argv, "p:c:n:h:m:", long_options, NULL)) !=
          -1) {
     switch (opt) {
@@ -463,7 +544,6 @@ int main(int argc, char *argv[]) {
 
   memset(client_cid, 0, sizeof(client_cid));
   sem_init(&connections_sem, 0, 1);
-  led_count = 0;
   int arg_led_count = argc - optind;
   if (arg_led_count <= 0) {
     LOG_ERROR("at least one LED name must be specified");
