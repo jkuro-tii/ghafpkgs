@@ -32,7 +32,14 @@ static int connections_count = 0;
 static int max_connections = MAX_CONNECTIONS;
 static sem_t connections_sem;
 static unsigned int client_cid[MAX_CONNECTIONS];
-static char *led_names[MAX_LEDS];
+static struct led {
+  char name[LED_NAME_LEN_MAX];
+  enum led_role {
+    LED_ROLE_UNKNOWN = 0,
+    LED_ROLE_NORMAL,
+    LED_ROLE_MONITORED,
+  } role;
+} leds[MAX_LEDS];
 
 struct client_data {
   unsigned int cid;
@@ -40,7 +47,7 @@ struct client_data {
   int client_index;
 };
 
-static int resolve_led_pattern(const char *pattern) {
+static int resolve_led_pattern(const char *pattern, enum led_role role) {
   char path[PATH_MAX];
   glob_t result = {0};
 
@@ -81,20 +88,21 @@ static int resolve_led_pattern(const char *pattern) {
     name++;
     LOG_DEBUG("LED '%s' matched '%s'", pattern, name);
 
-    // add led name if already not exists
-    int exists = 0;
-    for (int j = 0; j < led_count; j++) {
-      if (strcmp(led_names[j], name) == 0) {
+    // add led name if already not exists, or is already declared as a monitored
+    // LED
+    int exists = 0, j;
+    for (j = 0; j < led_count; j++) {
+      if (strcmp(leds[j].name, name) == 0) {
         exists = 1;
         break;
       }
     }
-    if (!exists) {
-      led_names[led_count] = strdup(name);
-      if (!led_names[led_count]) {
-        LOG_ERROR("failed to allocate memory for LED name '%s'", name);
-        continue;
-      }
+    int allowed = exists && (role == LED_ROLE_NORMAL) &&
+                  (leds[j].role == LED_ROLE_MONITORED);
+    if (!exists || allowed) {
+      strncpy(leds[led_count].name, name, LED_NAME_LEN_MAX - 1);
+      leds[led_count].name[LED_NAME_LEN_MAX - 1] = '\0';
+      leds[led_count].role = exists ? LED_ROLE_MONITORED : leds[j].role;
       led_count++;
     }
   }
@@ -103,14 +111,15 @@ static int resolve_led_pattern(const char *pattern) {
   return 0;
 }
 
-static int host_leds_check_exist(char **arg_led_names, int arg_led_count) {
+static int host_leds_check_exist(char **arg_led_names, int arg_led_count,
+                                 enum led_role role) {
 
   for (int i = 0; i < arg_led_count; i++) {
     if (strlen(arg_led_names[i]) >= LED_NAME_LEN_MAX) {
       LOG_ERROR("LED name too long: %s", arg_led_names[i]);
       continue;
     }
-    if (resolve_led_pattern(arg_led_names[i])) {
+    if (resolve_led_pattern(arg_led_names[i], role)) {
       continue;
     }
   }
@@ -146,17 +155,17 @@ static int host_leds_send_list(const int socket_fd) {
 
   for (int i = 0; i < led_count; i++) {
     // Send each LED name over the socket here.
-    LOG_DEBUG("Sending LED name: %s", led_names[i]);
+    LOG_DEBUG("Sending LED name: %s", leds[i].name);
     struct led_msg_hdr hdr;
     hdr.version = LED_PROXY_VERSION;
     hdr.type = LED_MSG_ADD_LED;
-    hdr.length = strlen(led_names[i]) + 1; // Include null terminator
-    hdr.max_brightness = MIN(get_max_brightness(led_names[i]), 255);
+    hdr.length = strlen(leds[i].name) + 1; // Include null terminator
+    hdr.max_brightness = MIN(get_max_brightness(leds[i].name), 255);
     if (write_all(socket_fd, &hdr, sizeof(hdr)) < 0) {
       LOG_ERROR("write: %s", strerror(errno));
       return -1;
     }
-    if (write_all(socket_fd, led_names[i], hdr.length) < 0) {
+    if (write_all(socket_fd, leds[i].name, hdr.length) < 0) {
       LOG_ERROR("write: %s", strerror(errno));
       return -1;
     }
@@ -173,7 +182,7 @@ static int host_leds_set(const struct led_msg_hdr *hdr) {
 
   LOG_DEBUG("Handling LED_MSG_SET_BRIGHTNESS message");
 
-  sprintf(buf + prefix_len, "%s/brightness", led_names[hdr->led_index]);
+  sprintf(buf + prefix_len, "%s/brightness", leds[hdr->led_index].name);
 
   FILE *f = fopen(buf, "w");
   if (!f) {
@@ -224,7 +233,7 @@ static void *host_leds_handle_client(const void *arg) {
       }
       LOG_DEBUG("Received LED_MSG_SET_BRIGHTNESS message for LED index %u [%s] "
                 "with brightness %d",
-                hdr.led_index, led_names[hdr.led_index], hdr.brightness);
+                hdr.led_index, leds[hdr.led_index].name, hdr.brightness);
       if (host_leds_set(&hdr) < 0) {
         LOG_ERROR("host_leds_set failed");
         goto exit;
@@ -395,11 +404,14 @@ int main(int argc, char *argv[]) {
       {"cid", required_argument, NULL, 'c'},
       {"clients", required_argument, NULL, 'n'},
       {"help", no_argument, NULL, 'h'},
+      {"monitored-led", required_argument, NULL, 'm'},
       {NULL, 0, NULL, 0}};
 
   int opt;
   char *tmp_str = NULL;
-  while ((opt = getopt_long(argc, argv, "p:c:n:h", long_options, NULL)) != -1) {
+  memset(leds, 0, sizeof(leds));
+  while ((opt = getopt_long(argc, argv, "p:c:n:h:m:", long_options, NULL)) !=
+         -1) {
     switch (opt) {
     case 'p':
       ulong tmp_port;
@@ -437,13 +449,18 @@ int main(int argc, char *argv[]) {
     case 'h':
       print_usage(argv[0]);
       return 0;
+    case 'm':
+      if (host_leds_check_exist(&optarg, 1, LED_ROLE_MONITORED) == 0) {
+        LOG_ERROR("Monitored LED does not exist under %s", LEDS_SYSFS_BASE);
+        return 1;
+      }
+      break;
     default:
       print_usage(argv[0]);
       return 1;
     }
   }
 
-  memset(led_names, 0, sizeof(led_names));
   memset(client_cid, 0, sizeof(client_cid));
   sem_init(&connections_sem, 0, 1);
   led_count = 0;
@@ -454,7 +471,8 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  if (host_leds_check_exist(&argv[optind], arg_led_count) == 0) {
+  if (host_leds_check_exist(&argv[optind], arg_led_count, LED_ROLE_NORMAL) ==
+      0) {
     LOG_ERROR("No LED interfaces exist under %s, exiting", LEDS_SYSFS_BASE);
     return 0;
   }
@@ -463,7 +481,7 @@ int main(int argc, char *argv[]) {
   fprintf(stderr, "Starting host-led-proxy on vsock port %u with %d LED(s):",
           vsock_port, led_count);
   for (int i = 0; i < led_count; i++)
-    fprintf(stderr, " %s", led_names[i]);
+    fprintf(stderr, " %s", leds[i].name);
 
   fprintf(stderr, "\n");
 
