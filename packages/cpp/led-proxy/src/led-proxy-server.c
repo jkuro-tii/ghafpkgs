@@ -570,7 +570,7 @@ int main(int argc, char *argv[]) {
   }
 
   signal(SIGPIPE, SIG_IGN);
-  fprintf(stderr, "Starting host-led-proxy on vsock port %u with %d LED(s):",
+  fprintf(stderr, "Starting host-led-proxy on vsock port %u with %d LED(s) handled:",
           vsock_port, led_count);
   for (int i = 0; i < led_count; i++)
     fprintf(stderr, " %s", leds[i].name);
