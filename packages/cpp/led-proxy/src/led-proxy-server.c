@@ -232,9 +232,7 @@ static void *host_leds_handle_client(const void *arg) {
 
     char dummy[32];
     ssize_t ret = read(fd, dummy, sizeof(dummy));
-    if (ret < 0) {
-      LOG_ERROR("read: %s", strerror(errno));
-    }
+    (void)ret;
     fds++;
   }
 
@@ -306,13 +304,8 @@ static void *host_leds_handle_client(const void *arg) {
         // execute a dummy read to clear the event
         char dummy[32];
         ssize_t ret = read(pollfds[i].fd, &dummy, sizeof(dummy));
-        if (ret < 0) {
-          LOG_ERROR("read: %s", strerror(errno));
-          continue;
-        }
-        if (lseek(pollfds[i].fd, 0, SEEK_SET) < 0) {
-          LOG_ERROR("lseek: %s", strerror(errno));
-        }
+        (void)ret;
+        (void)lseek(pollfds[i].fd, 0, SEEK_SET);
 
         int led_index = monitored_leds[i - 1];
         u_int16_t brightness =
