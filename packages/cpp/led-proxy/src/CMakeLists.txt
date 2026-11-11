@@ -10,6 +10,8 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
 endif()
 find_package(Threads REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SYSTEMD REQUIRED libsystemd)
 
 set(CMAKE_C_FLAGS_DEBUG "-g -O0 -DDEBUG -Wall -Wextra")
 set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG")
@@ -29,13 +31,13 @@ target_include_directories(led-proxy-server PRIVATE
 )
 target_include_directories(led-proxy-client PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SYSTEMD_INCLUDE_DIRS}
 )
 
 target_compile_options(led-proxy-server PRIVATE -Wall -Wextra)
 target_compile_options(led-proxy-client PRIVATE -Wall -Wextra)
 
-target_link_libraries(led-proxy-server PRIVATE Threads::Threads)
-target_link_libraries(led-proxy-client PRIVATE Threads::Threads)
+target_link_libraries(led-proxy-client PRIVATE Threads::Threads ${SYSTEMD_LIBRARIES})
 
 install(TARGETS led-proxy-server RUNTIME DESTINATION bin)
 install(TARGETS led-proxy-client RUNTIME DESTINATION bin)

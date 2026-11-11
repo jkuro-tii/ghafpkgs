@@ -90,8 +90,6 @@ static int resolve_led_pattern(const char *pattern, enum led_role role) {
     name++;
     LOG_DEBUG("LED '%s' matched '%s'", pattern, name);
 
-    // add led name if already not exists, or is already declared as a monitored
-    // LED
     int exists = 0, j;
     for (j = 0; j < led_count; j++) {
       if (strcmp(leds[j].name, name) == 0) {
@@ -99,6 +97,8 @@ static int resolve_led_pattern(const char *pattern, enum led_role role) {
         break;
       }
     }
+    // Determine if this LED can be added or updated based on its role and
+    // whether it already exists.
     int allowed = exists && (role == LED_ROLE_NORMAL) &&
                   (leds[j].role == LED_ROLE_MONITORED);
     if (!exists) {
@@ -232,7 +232,11 @@ static void *host_leds_handle_client(const void *arg) {
     // execute a dummy read to clear any existing event
     lseek(fd, 0, SEEK_SET);
     char dummy[32];
-    read(fd, dummy, sizeof(dummy));
+    ssize_t ret = read(fd, dummy, sizeof(dummy));
+    if (ret < 0) {
+      LOG_ERROR("read: %s", strerror(errno));
+      return NULL;
+    }
     fds++;
   }
 
@@ -304,7 +308,11 @@ static void *host_leds_handle_client(const void *arg) {
         // execute a dummy read to clear the event
         lseek(pollfds[i].fd, 0, SEEK_SET);
         char dummy[32];
-        read(pollfds[i].fd, &dummy, sizeof(dummy));
+        ssize_t ret = read(pollfds[i].fd, &dummy, sizeof(dummy));
+        if (ret < 0) {
+          LOG_ERROR("read: %s", strerror(errno));
+          continue;
+        }
         int led_index = monitored_leds[i - 1];
         u_int16_t brightness =
             get_brightness(leds[led_index].name, "brightness");
@@ -315,6 +323,7 @@ static void *host_leds_handle_client(const void *arg) {
                     leds[led_index].name);
           continue;
         }
+        // Notify the client about the brightness change for this LED.
         hdr.type = LED_MSG_BRIGHTNESS_CHANGED;
         hdr.led_index = led_index;
         hdr.brightness = brightness;

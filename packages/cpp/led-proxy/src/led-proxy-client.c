@@ -148,7 +148,7 @@ static int guest_uleds_handle_add_led(const struct led_msg_hdr *hdr) {
   }
   leds[led_count].index = incoming_led_count;
   leds[led_count].max_brightness = hdr->max_brightness;
-  leds[led_count].brightness = -1; // Initialize brightness to -1
+  leds[led_count].brightness = -1; // Initialize brightness to an invalid value
   leds[led_count].fd = -1;         // Not yet opened
   incoming_led_count++;
   led_count++;
@@ -198,12 +198,13 @@ static void set_brightness(int led_index, int brightness) {
     return;
   }
   LOG_DEBUG("Sent brightness update for LED %d: %d", led_index, brightness);
+  leds[led_index].brightness = brightness; // Update local brightness value
 }
 
-// Handle notification from the host that keyboard brightness has changed
-// Keyboard combination Fn+space adjusts the keyboard backlight brightness
-// directly on the host. This function updates the local LED state and notifies
-// upowerd if the keyboard backlight changes.
+// React to a host-originated keyboard backlight change (e.g. Fn+Space,
+// which adjusts brightness directly on the host, bypassing this process).
+// Syncs the cached LED state and, if the brightness value actually changed,
+// emits the D-Bus signal that upowerd listens on.
 static int guest_uleds_handle_brightness_changed(struct led_msg_hdr *hdr) {
   if (hdr->led_index >= led_count) {
     LOG_ERROR("Invalid LED index: %u", hdr->led_index);
@@ -214,7 +215,6 @@ static int guest_uleds_handle_brightness_changed(struct led_msg_hdr *hdr) {
   LOG_DEBUG("Received brightness change for LED %d: %d", led_index, brightness);
 
   // Execute dbus call to notify upowerd that keyboard brightness has changed
-  // check if the LED is the keyboard backlight
   leds[led_index].brightness = brightness;
   if (strstr(leds[led_index].name, "kbd_backlight") != NULL) {
     sd_bus *bus = NULL;
@@ -240,6 +240,7 @@ static int guest_uleds_handle_brightness_changed(struct led_msg_hdr *hdr) {
 
   return 0;
 }
+
 int guest_uleds_run() {
   // send HELLO message to the host
   struct led_msg_hdr hdr;
@@ -294,7 +295,6 @@ int guest_uleds_run() {
       } else if (hdr.type == LED_MSG_BRIGHTNESS_CHANGED) {
         ret = guest_uleds_handle_brightness_changed(&hdr);
         if (ret < 0) {
-          LOG_ERROR("guest_uleds_handle_brightness_changed failed");
           return -1;
         }
       } else {

@@ -8,6 +8,7 @@
   gnused,
   makeWrapper,
   pkg-config,
+  systemd,
   lib,
 }:
 stdenv.mkDerivation {
@@ -20,6 +21,10 @@ stdenv.mkDerivation {
     cmake
     pkg-config
     makeWrapper
+  ];
+
+  buildInputs = [
+    systemd
   ];
 
   postInstall = ''
