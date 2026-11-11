@@ -185,6 +185,7 @@ static int read_brightness(int fd) {
 static void set_brightness(int led_index, int brightness) {
   LOG_DEBUG("Setting brightness for LED %d to %d", led_index, brightness);
   if (leds[led_index].brightness == brightness) {
+    LOG_DEBUG("Brightness for LED %d unchanged, ignoring", led_index);
     return;
   }
   // Send brightness update to the host
@@ -226,7 +227,7 @@ static int guest_uleds_handle_brightness_changed(struct led_msg_hdr *hdr) {
     r = sd_bus_call_method(bus, "org.freedesktop.UPower",
                            "/org/freedesktop/UPower/KbdBacklight",
                            "org.freedesktop.UPower.KbdBacklight",
-                           "SetBrightness", NULL, NULL, "u", brightness);
+                           "SetBrightness", NULL, NULL, "i", brightness);
     if (r < 0) {
       LOG_ERROR("Failed to call SetBrightness: %s", strerror(-r));
       sd_bus_unref(bus);
@@ -306,10 +307,10 @@ int guest_uleds_run() {
         // handle writable event for LED i here
         int brightness = read_brightness(pollfds[i].fd);
         if (brightness < 0) {
-          LOG_ERROR("Failed to read brightness for LED %d (%s)", i,
+          LOG_ERROR("Failed to read brightness for LED %d (%s)", i - 1,
                     leds[i - 1].name);
         } else {
-          LOG_DEBUG("Successfully read brightness for LED %d (%s): %d", i,
+          LOG_DEBUG("Successfully read brightness for LED %d (%s): %d", i - 1,
                     leds[i - 1].name, brightness);
           set_brightness(i - 1, brightness);
         }

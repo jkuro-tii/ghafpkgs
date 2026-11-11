@@ -222,20 +222,18 @@ static void *host_leds_handle_client(const void *arg) {
              leds[i].name);
     int fd = open(buf, O_RDONLY);
     if (fd < 0) {
-      LOG_ERROR("open: %s", strerror(errno));
+      LOG_ERROR("open: %s: %s", buf, strerror(errno));
       return NULL;
     }
     pollfds[fds].fd = fd;
     pollfds[fds].events = POLLPRI;
     pollfds[fds].revents = 0;
     monitored_leds[fds - 1] = i; // store the monitored LED index
-    // execute a dummy read to clear any existing event
-    lseek(fd, 0, SEEK_SET);
+
     char dummy[32];
     ssize_t ret = read(fd, dummy, sizeof(dummy));
     if (ret < 0) {
       LOG_ERROR("read: %s", strerror(errno));
-      return NULL;
     }
     fds++;
   }
@@ -306,23 +304,28 @@ static void *host_leds_handle_client(const void *arg) {
          i++) { // i starts from 1 as the zero element is clients fd
       if (pollfds[i].revents & POLLPRI) {
         // execute a dummy read to clear the event
-        lseek(pollfds[i].fd, 0, SEEK_SET);
         char dummy[32];
         ssize_t ret = read(pollfds[i].fd, &dummy, sizeof(dummy));
         if (ret < 0) {
           LOG_ERROR("read: %s", strerror(errno));
           continue;
         }
+        if (lseek(pollfds[i].fd, 0, SEEK_SET) < 0) {
+          LOG_ERROR("lseek: %s", strerror(errno));
+        }
+
         int led_index = monitored_leds[i - 1];
         u_int16_t brightness =
             get_brightness(leds[led_index].name, "brightness");
-        LOG_DEBUG("LED event for monitored LED: %s brightness %u",
-                  leds[led_index].name, brightness);
         if (brightness == UINT16_MAX) {
           LOG_ERROR("Failed to get brightness for LED: %s",
                     leds[led_index].name);
           continue;
         }
+
+        LOG_DEBUG("LED event for monitored LED: %s brightness %u",
+                  leds[led_index].name, brightness);
+
         // Notify the client about the brightness change for this LED.
         hdr.type = LED_MSG_BRIGHTNESS_CHANGED;
         hdr.led_index = led_index;
