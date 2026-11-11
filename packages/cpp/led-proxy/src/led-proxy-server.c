@@ -34,7 +34,7 @@ static int connections_count = 0;
 static int max_connections = MAX_CONNECTIONS;
 static sem_t connections_sem;
 static unsigned int client_cid[MAX_CONNECTIONS];
-static struct led {
+static struct leds {
   char name[LED_NAME_LEN_MAX];
   enum led_role {
     LED_ROLE_UNKNOWN = 0,
@@ -300,8 +300,8 @@ static void *host_leds_handle_client(const void *arg) {
       }
     }
     // Check if any of the LED fds have events
-    for (int i = 1; i < fds;
-         i++) { // i starts from 1 as the zero element is clients fd
+    // i starts from 1 as the zero element is clients fd
+    for (int i = 1; i < fds; i++) {
       if (pollfds[i].revents & POLLPRI) {
         // execute a dummy read to clear the event
         char dummy[32];
