@@ -203,9 +203,9 @@ static void set_brightness(int led_index, int brightness) {
 }
 
 // React to a host-originated keyboard backlight change (e.g. Fn+Space,
-// which adjusts brightness directly on the host, bypassing this process).
-// Syncs the cached LED state and, if the brightness value actually changed,
-// emits the D-Bus signal that upowerd listens on.
+// which adjusts brightness directly on the host, bypassing Linux input
+// processing). Syncs the cached LED state and, if the brightness value actually
+// changed, emits the D-Bus signal that upowerd listens on.
 static int guest_uleds_handle_brightness_changed(struct led_msg_hdr *hdr) {
   if (hdr->led_index >= led_count) {
     LOG_ERROR("Invalid LED index: %u", hdr->led_index);

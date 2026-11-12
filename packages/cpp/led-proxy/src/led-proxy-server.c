@@ -147,7 +147,7 @@ uint16_t get_brightness(const char *led_name, const char *type) {
     return UINT16_MAX;
   }
   if (brightness < 0 || brightness > UINT16_MAX) {
-    LOG_ERROR("Invalid max brightness value: %d", brightness);
+    LOG_ERROR("Invalid brightness value: %d", brightness);
     fclose(f);
     return UINT16_MAX;
   }
